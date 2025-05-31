@@ -1,21 +1,21 @@
 require('dotenv').config({ override: true });
 
-const express      = require('express');
-const cors         = require('cors');
-const morgan       = require('morgan');
+const express = require('express');
+const cors = require('cors');
+const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
-const passport     = require('passport');
-const rateLimit    = require('express-rate-limit');
+const passport = require('passport');
+const rateLimit = require('express-rate-limit');
 
-const authRoute          = require('./controllers/auth');
-const usersRoute         = require('./controllers/users');
-const cardsRoute         = require('./controllers/cards');
+const authRoute = require('./controllers/auth');
+const usersRoute = require('./controllers/users');
+const cardsRoute = require('./controllers/cards');
 const notificationsRoute = require('./controllers/notifications');
 const subscriptionsRoute = require('./controllers/subscriptions');
-const aiChatRoute        = require('./controllers/chat');
-const sessionsRoute      = require('./controllers/chats');
-const paymentsRoute      = require('./controllers/payments');
-const requireAuth        = require('./middleware/requireAuth');
+const aiChatRoute = require('./controllers/chat');
+const sessionsRoute = require('./controllers/chats');
+const paymentsRoute = require('./controllers/payments');
+const requireAuth = require('./middleware/requireAuth');
 
 const app = express();
 
@@ -27,28 +27,30 @@ const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://dentgo-f.vercel.
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
   'https://dentgo.io',
-  'https://dentgo-f.vercel.app'
+  'https://dentgo-f.vercel.app',
 ];
+
+const VERCEL_REGEX = /^https:\/\/dentgo.*\.vercel\.app$/;
 
 /* ------------------------------------------------------------------ */
 /* 1) Generic middleware                                              */
 /* ------------------------------------------------------------------ */
 app.use(morgan('dev'));
 
+app.use((req, res, next) => {
+  console.log(`Incoming Origin: ${req.headers.origin}`);
+  console.log(`Incoming Cookies:`, req.headers.cookie);
+  next();
+});
+
 app.use(
   cors({
-    origin: (incomingOrigin, callback) => {
-      // Allow requests with no origin (e.g., Postman)
-      if (!incomingOrigin) return callback(null, true);
-
-      const vercelRegex = /^https:\/\/dentgo.*\.vercel\.app$/;
-      if (
-        ALLOWED_ORIGINS.includes(incomingOrigin) ||
-        vercelRegex.test(incomingOrigin)
-      ) {
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (ALLOWED_ORIGINS.includes(origin) || VERCEL_REGEX.test(origin)) {
         return callback(null, true);
       }
-      return callback(new Error(`CORS: origin "${incomingOrigin}" not allowed`));
+      return callback(new Error(`CORS: origin "${origin}" not allowed`));
     },
     credentials: true,
     allowedHeaders: ['Content-Type'],
@@ -121,7 +123,6 @@ app.get('/', (_req, res) => {
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
 
-  // If it's a CORS error, send a 403
   if (err.message && err.message.startsWith('CORS:')) {
     return res.status(403).json({ error: err.message });
   }
@@ -133,6 +134,6 @@ app.use((err, _req, res, _next) => {
 /* 10) Start server                                                   */
 /* ------------------------------------------------------------------ */
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () =>
-  console.log(`🚀  Server running on http://localhost:${PORT}`)
-);
+app.listen(PORT, () => {
+  console.log(`🚀  Server running on http://localhost:${PORT}`);
+});
