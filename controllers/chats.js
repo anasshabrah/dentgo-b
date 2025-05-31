@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const prisma = require('../src/lib/prismaClient');
+const prisma = require('../lib/prismaClient');
 
 // GET /api/chats - list all chat sessions for the authenticated user
 router.get('/', async (req, res) => {

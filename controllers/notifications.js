@@ -1,7 +1,7 @@
 // cb/routes/notifications.js
 const express = require('express');
 const router  = express.Router();
-const prisma  = require('../src/lib/prismaClient');
+const prisma  = require('../lib/prismaClient');
 
 /* GET /api/notifications – list user notifications */
 router.get('/', async (req, res) => {

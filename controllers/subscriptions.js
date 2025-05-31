@@ -1,7 +1,7 @@
 // cb/routes/subscriptions.js
 const express = require('express');
 const router  = express.Router();
-const prisma  = require('../src/lib/prismaClient');
+const prisma  = require('../lib/prismaClient');
 
 /* GET /api/subscriptions – list user subscriptions */
 router.get('/', async (req, res) => {

@@ -1,7 +1,7 @@
 // cb/routes/cards.js
 const express     = require("express");
 const router      = express.Router();
-const prisma      = require("../src/lib/prismaClient");
+const prisma      = require("../lib/prismaClient");
 const stripe      = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 // All routes under /api/cards are already protected by requireAuth in server.js.

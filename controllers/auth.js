@@ -3,7 +3,7 @@ require('dotenv').config({ override: true });
 
 const express        = require('express');
 const router         = express.Router();
-const prisma         = require('../src/lib/prismaClient');
+const prisma         = require('../lib/prismaClient');
 const jwt            = require('jsonwebtoken');
 const passport       = require('passport');
 const AppleStrategy  = require('passport-apple');

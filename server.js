@@ -7,14 +7,14 @@ const cookieParser = require('cookie-parser');
 const passport     = require('passport');
 const rateLimit    = require('express-rate-limit');
 
-const authRoute          = require('./routes/auth');
-const usersRoute         = require('./routes/users');
-const cardsRoute         = require('./routes/cards');
-const notificationsRoute = require('./routes/notifications');
-const subscriptionsRoute = require('./routes/subscriptions');
-const aiChatRoute        = require('./routes/chat');
-const sessionsRoute      = require('./routes/chats');
-const paymentsRoute      = require('./routes/payments');
+const authRoute          = require('./controllers/auth');
+const usersRoute         = require('./controllers/users');
+const cardsRoute         = require('./controllers/cards');
+const notificationsRoute = require('./controllers/notifications');
+const subscriptionsRoute = require('./controllers/subscriptions');
+const aiChatRoute        = require('./controllers/chat');
+const sessionsRoute      = require('./controllers/chats');
+const paymentsRoute      = require('./controllers/payments');
 const requireAuth        = require('./middleware/requireAuth');
 
 const app = express();

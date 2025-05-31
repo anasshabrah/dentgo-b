@@ -1,7 +1,7 @@
 // cb/routes/users.js
 const express = require('express');
 const router = express.Router();
-const prisma = require('../src/lib/prismaClient');
+const prisma = require('../lib/prismaClient');
 
 // Utility: Validate user input (basic)
 function validateUserInput({ name, email, role }) {
