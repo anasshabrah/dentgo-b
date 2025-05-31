@@ -20,7 +20,7 @@ const requireAuth        = require('./middleware/requireAuth');
 const app = express();
 
 /* ------------------------------------------------------------------ */
-/* 0) Allowed Frontend Origins                                         */
+/* 0) Allowed Frontend Origins                                        */
 /* ------------------------------------------------------------------ */
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://dentgo-f.vercel.app';
 
@@ -41,7 +41,11 @@ app.use(
       // Allow requests with no origin (e.g., Postman)
       if (!incomingOrigin) return callback(null, true);
 
-      if (ALLOWED_ORIGINS.includes(incomingOrigin)) {
+      const vercelRegex = /^https:\/\/dentgo.*\.vercel\.app$/;
+      if (
+        ALLOWED_ORIGINS.includes(incomingOrigin) ||
+        vercelRegex.test(incomingOrigin)
+      ) {
         return callback(null, true);
       }
       return callback(new Error(`CORS: origin "${incomingOrigin}" not allowed`));
@@ -55,7 +59,7 @@ app.use(
 app.use(cookieParser());
 
 /* ------------------------------------------------------------------ */
-/* 2) Stripe Webhook must parse raw body so signature can be verified  */
+/* 2) Stripe Webhook must parse raw body so signature can be verified */
 /* ------------------------------------------------------------------ */
 app.post(
   '/api/payments/webhook',
@@ -84,7 +88,7 @@ app.use('/api/auth', authRoute);
 app.use('/api/payments', requireAuth, paymentsRoute);
 
 /* ------------------------------------------------------------------ */
-/* 7) Other protected routes                                           */
+/* 7) Other protected routes                                          */
 /* ------------------------------------------------------------------ */
 app.use('/api/users', requireAuth, usersRoute);
 app.use('/api/cards', requireAuth, cardsRoute);
