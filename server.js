@@ -18,7 +18,19 @@ const paymentsRoute      = require('./controllers/payments');
 const requireAuth        = require('./middleware/requireAuth');
 
 const app = express();
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
+
+/* ------------------------------------------------------------------ */
+/* 0) Allowed Frontend Origins                                         */
+/* ------------------------------------------------------------------ */
+// You said your frontend is hosted at: https://dentgo-f.vercel.app
+// Ensure this matches exactly (no trailing slash).
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://dentgo-f.vercel.app';
+
+const ALLOWED_ORIGINS = [
+  FRONTEND_ORIGIN,
+  // If you have any preview URLs or additional domains, add them here:
+  // 'https://preview-dentgo.vercel.app',
+];
 
 /* ------------------------------------------------------------------ */
 /* 1) Generic middleware                                              */
@@ -27,7 +39,15 @@ app.use(morgan('dev'));
 
 app.use(
   cors({
-    origin: FRONTEND_ORIGIN,
+    origin: (incomingOrigin, callback) => {
+      // Allow requests with no origin (like mobile apps or Postman).
+      if (!incomingOrigin) return callback(null, true);
+
+      if (ALLOWED_ORIGINS.includes(incomingOrigin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`CORS: origin "${incomingOrigin}" not allowed`));
+    },
     credentials: true,
     allowedHeaders: ['Content-Type'],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
@@ -94,6 +114,10 @@ app.get('/api/ping', (_req, res) => res.json({ ok: true }));
 /* ------------------------------------------------------------------ */
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
+  // If it's a CORS error, send a 403:
+  if (err.message && err.message.startsWith('CORS:')) {
+    return res.status(403).json({ error: err.message });
+  }
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
