@@ -22,12 +22,12 @@ const app = express();
 /* ------------------------------------------------------------------ */
 /* 0) Allowed Frontend Origins                                         */
 /* ------------------------------------------------------------------ */
-// Make sure FRONTEND_ORIGIN is set to "https://dentgo-f.vercel.app" in your Render environment
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://dentgo-f.vercel.app';
+
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
-  // Add additional domains here if needed (e.g., a preview URL):
-  // 'https://preview-dentgo.vercel.app',
+  'https://dentgo.io',
+  'https://dentgo-f.vercel.app'
 ];
 
 /* ------------------------------------------------------------------ */
