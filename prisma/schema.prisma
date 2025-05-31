@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                Int            @id @default(autoincrement())
+  name              String
+  email             String         @unique
+  picture           String?
+  role              Role           @default(USER)
+  stripeCustomerId  String?        @unique
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  cards             Card[]
+  chats             ChatSession[]
+  notifications     Notification[]
+  oauth             OAuthAccount[]
+  subscriptions     Subscription[]
+  refreshTokens     RefreshToken[]
+
+  @@index([email])
+}
+
+model Subscription {
+  id                   Int                 @id @default(autoincrement())
+  plan                 SubscriptionPlan
+  status               SubscriptionStatus  @default(ACTIVE)
+  beganAt              DateTime            @default(now())
+  renewsAt             DateTime?
+  cancelsAt            DateTime?
+  stripeSubscriptionId String?             @unique
+  stripePriceId        String?
+  userId               Int
+  user                 User                @relation(fields: [userId], references: [id])
+}
+
+
+model OAuthAccount {
+  id             Int       @id @default(autoincrement())
+  provider       String
+  providerUserId String
+  accessToken    String?
+  refreshToken   String?
+  expiresAt      DateTime?
+  userId         Int
+  user           User      @relation(fields: [userId], references: [id])
+
+  @@unique([provider, providerUserId])
+}
+
+model Card {
+  id          Int         @id @default(autoincrement())
+  type        CardType
+  network     CardNetwork
+  last4       String      @db.Char(4)
+  expiryMonth Int
+  expiryYear  Int
+  nickName    String?
+  isActive    Boolean     @default(true)
+  userId      Int
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  user        User        @relation(fields: [userId], references: [id])
+}
+
+model ChatSession {
+  id        Int       @id @default(autoincrement())
+  title     String?
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  userId    Int
+  user      User      @relation(fields: [userId], references: [id])
+  messages  Message[]
+}
+
+model Message {
+  id        Int         @id @default(autoincrement())
+  role      MessageRole
+  content   String
+  createdAt DateTime    @default(now())
+  chatId    Int
+  chat      ChatSession @relation(fields: [chatId], references: [id])
+
+  @@index([chatId])
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  title     String
+  body      String
+  seen      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  tokenHash String
+  user      User     @relation(fields: [userId], references: [id])
+  userId    Int
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum CardType {
+  DEBIT
+  CREDIT
+}
+
+enum CardNetwork {
+  VISA
+  MASTERCARD
+  AMEX
+  DISCOVER
+  UNIONPAY
+  OTHER
+}
+
+enum SubscriptionPlan {
+  FREE
+  PLUS
+  PRO
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  EXPIRED
+}
+
+enum MessageRole {
+  USER
+  BOT
+}
