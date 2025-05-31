@@ -61,7 +61,7 @@ router.post("/", async (req, res) => {
     ];
 
     const gateResp = await openai.chat.completions.create({
-      model: process.env.GPT4O_MODEL || "gpt-4o",
+      model: process.env.GPT_MODEL || "gpt-4o",
       messages: gateMessages,
     });
 
@@ -87,7 +87,7 @@ router.post("/", async (req, res) => {
     }
 
     // Real answer: include full history + latest user turn
-    const targetModel = process.env.GPT4T_MODEL;
+    const targetModel = process.env.GPT_MODEL;
     if (!targetModel) {
       console.error("❌ GPT4T_MODEL missing from .env");
       return res.status(500).json({ error: "Server misconfiguration" });

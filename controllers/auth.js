@@ -98,17 +98,17 @@ router.post('/google', async (req, res) => {
 /* Apple OAuth (Passport)                                            */
 /* ────────────────────────────────────────────────────────────────── */
 passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((obj,  done) => done(null, obj));
+passport.deserializeUser((obj, done) => done(null, obj));
 
 passport.use(
   new AppleStrategy(
     {
-      clientID           : process.env.APPLE_CLIENT_ID,
-      teamID             : process.env.APPLE_TEAM_ID,
-      keyID              : process.env.APPLE_KEY_ID,
-      privateKeyLocation : process.env.APPLE_PRIVATE_KEY_PATH,
-      callbackURL        : `${process.env.FRONTEND_ORIGIN}/api/auth/apple/callback`,
-      scope: ['name', 'email'],
+      clientID    : process.env.APPLE_CLIENT_ID,
+      teamID      : process.env.APPLE_TEAM_ID,
+      keyID       : process.env.APPLE_KEY_ID,
+      privateKey  : process.env.APPLE_PRIVATE_KEY,
+      callbackURL : `${process.env.FRONTEND_ORIGIN}/api/auth/apple/callback`,
+      scope       : ['name', 'email'],
     },
     (accessToken, refreshToken, idToken, profile, done) => {
       done(null, {
@@ -116,7 +116,7 @@ passport.use(
         email          : profile.email,
         name           : `${profile.name?.givenName || ''} ${profile.name?.familyName || ''}`.trim(),
       });
-    },
+    }
   )
 );
 
