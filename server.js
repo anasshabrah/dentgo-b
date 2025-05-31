@@ -22,13 +22,11 @@ const app = express();
 /* ------------------------------------------------------------------ */
 /* 0) Allowed Frontend Origins                                         */
 /* ------------------------------------------------------------------ */
-// You said your frontend is hosted at: https://dentgo-f.vercel.app
-// Ensure this matches exactly (no trailing slash).
+// Make sure FRONTEND_ORIGIN is set to "https://dentgo-f.vercel.app" in your Render environment
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://dentgo-f.vercel.app';
-
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
-  // If you have any preview URLs or additional domains, add them here:
+  // Add additional domains here if needed (e.g., a preview URL):
   // 'https://preview-dentgo.vercel.app',
 ];
 
@@ -40,7 +38,7 @@ app.use(morgan('dev'));
 app.use(
   cors({
     origin: (incomingOrigin, callback) => {
-      // Allow requests with no origin (like mobile apps or Postman).
+      // Allow requests with no origin (e.g., Postman)
       if (!incomingOrigin) return callback(null, true);
 
       if (ALLOWED_ORIGINS.includes(incomingOrigin)) {
@@ -54,8 +52,6 @@ app.use(
   })
 );
 
-// We still need express.json() for all JSON bodies except Stripe webhooks.
-// Because the Stripe webhook uses raw body, we will mount it before express.json().
 app.use(cookieParser());
 
 /* ------------------------------------------------------------------ */
@@ -71,7 +67,6 @@ app.post(
 /* 3) Now mount express.json() for all other routes                   */
 /* ------------------------------------------------------------------ */
 app.use(express.json());
-// (No need for a “verify” callback here, since the webhook is handled above.)
 
 /* ------------------------------------------------------------------ */
 /* 4) Passport (Apple OAuth)                                          */
@@ -114,10 +109,12 @@ app.get('/api/ping', (_req, res) => res.json({ ok: true }));
 /* ------------------------------------------------------------------ */
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
-  // If it's a CORS error, send a 403:
+
+  // If it's a CORS error, send a 403
   if (err.message && err.message.startsWith('CORS:')) {
     return res.status(403).json({ error: err.message });
   }
+
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
