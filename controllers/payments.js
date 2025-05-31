@@ -1,4 +1,3 @@
-// routes/payments.js
 const express = require('express');
 const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
@@ -51,7 +50,13 @@ router.post(
   async (req, res, next) => {
     try {
       const userId = req.user.id;
-      const { priceId, paymentMethodId } = req.body;
+      const { priceId: frontendPriceId, paymentMethodId } = req.body;
+
+      const priceId = frontendPriceId || process.env.STRIPE_PRICE_ID;
+
+      if (!priceId) {
+        return res.status(400).json({ error: 'No price ID provided' });
+      }
 
       const user = await prisma.user.findUnique({
         where: { id: userId },

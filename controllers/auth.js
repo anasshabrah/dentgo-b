@@ -1,4 +1,3 @@
-// routes/auth.js
 require('dotenv').config({ override: true });
 
 const express = require('express');
