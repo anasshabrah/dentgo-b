@@ -40,16 +40,18 @@ async function issueRefresh(user) {
 }
 
 function setAuthCookies(res, access, refresh) {
-  res.cookie('accessToken', access, {
+  const cookieOptions = {
     httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
+    secure: true,                // Use HTTPS for secure cookies
+    sameSite: 'none',            // Required for cross-site cookies
+  };
+
+  res.cookie('accessToken', access, {
+    ...cookieOptions,
     maxAge: ACCESS_TTL * 1000,
   });
   res.cookie('refreshToken', refresh, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
+    ...cookieOptions,
     maxAge: REFRESH_TTL * 1000,
     path: '/api/auth/refresh',
   });
@@ -227,8 +229,8 @@ router.post('/logout', async (req, res) => {
         .then(match => match ? prisma.refreshToken.delete({ where: { id: t.id } }) : null)
     ));
   }
-  res.clearCookie('accessToken');
-  res.clearCookie('refreshToken', { path: '/api/auth/refresh' });
+  res.clearCookie('accessToken', { secure: true, sameSite: 'none' });
+  res.clearCookie('refreshToken', { path: '/api/auth/refresh', secure: true, sameSite: 'none' });
   res.status(204).end();
 });
 
