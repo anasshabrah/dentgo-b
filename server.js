@@ -1,40 +1,40 @@
 // backend/server.js
-require('dotenv').config({ override: true });
+require("dotenv").config({ override: true });
 
-const express = require('express');
-const cors = require('cors');
-const morgan = require('morgan');
-const cookieParser = require('cookie-parser');
-const passport = require('passport');
-const rateLimit = require('express-rate-limit');
+const express = require("express");
+const cors = require("cors");
+const morgan = require("morgan");
+const cookieParser = require("cookie-parser");
+const passport = require("passport");
+const rateLimit = require("express-rate-limit");
 
 // import our routes
-const authRoute = require('./controllers/auth');
-const usersRoute = require('./controllers/users');
-const cardsRoute = require('./controllers/cards');
-const notificationsRoute = require('./controllers/notifications');
-const subscriptionsRoute = require('./controllers/subscriptions');
-const aiChatRoute = require('./controllers/chat');
-const sessionsRoute = require('./controllers/chats');
-const paymentsRoute = require('./controllers/payments');
-const requireAuth = require('./middleware/requireAuth');
+const authRoute = require("./controllers/auth");
+const usersRoute = require("./controllers/users");
+const cardsRoute = require("./controllers/cards");
+const notificationsRoute = require("./controllers/notifications");
+const subscriptionsRoute = require("./controllers/subscriptions");
+const aiChatRoute = require("./controllers/chat");
+const sessionsRoute = require("./controllers/chats");
+const paymentsRoute = require("./controllers/payments");
+const requireAuth = require("./middleware/requireAuth");
 
 const app = express();
 
 /* ────────────────────────────────────────────────────────────────── */
 /* 0) Trust proxy (for secure cookies behind SSL proxies)             */
 /* ────────────────────────────────────────────────────────────────── */
-app.set('trust proxy', 1); // trusting first proxy in chain
+app.set("trust proxy", 1); // trust first proxy
 
 /* ────────────────────────────────────────────────────────────────── */
 /* 1) Allowed Frontend Origins                                        */
 /* ────────────────────────────────────────────────────────────────── */
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://dentgo-f.vercel.app';
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "https://dentgo-f.vercel.app";
 
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
-  'https://dentgo.io',
-  'https://dentgo-f.vercel.app',
+  "https://dentgo.io",
+  "https://dentgo-f.vercel.app",
 ];
 
 // Regex to allow any preview URL under dentgo-*.vercel.app
@@ -43,7 +43,7 @@ const VERCEL_REGEX = /^https:\/\/dentgo.*\.vercel\.app$/;
 /* ────────────────────────────────────────────────────────────────── */
 /* 2) Generic middleware                                              */
 /* ────────────────────────────────────────────────────────────────── */
-app.use(morgan('dev'));
+app.use(morgan("dev"));
 
 app.use((req, res, next) => {
   console.log(`Incoming Origin: ${req.headers.origin}`);
@@ -54,27 +54,28 @@ app.use((req, res, next) => {
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps or curl)
+      // Allow requests with no origin (e.g. mobile apps, Postman)
       if (!origin) return callback(null, true);
+
       if (ALLOWED_ORIGINS.includes(origin) || VERCEL_REGEX.test(origin)) {
         return callback(null, true);
       }
       return callback(new Error(`CORS: origin "${origin}" not allowed`));
     },
     credentials: true,
-    allowedHeaders: ['Content-Type'],
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ["Content-Type"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   })
 );
 
 app.use(cookieParser());
 
 /* ────────────────────────────────────────────────────────────────── */
-/* 3) Stripe Webhook – need raw body for signature verification      */
+/* 3) Stripe Webhook – raw body for signature verification            */
 /* ────────────────────────────────────────────────────────────────── */
 app.post(
-  '/api/payments/webhook',
-  express.raw({ type: 'application/json' }),
+  "/api/payments/webhook",
+  express.raw({ type: "application/json" }),
   paymentsRoute
 );
 
@@ -91,50 +92,50 @@ app.use(passport.initialize());
 /* ────────────────────────────────────────────────────────────────── */
 /* 6) Public auth routes                                              */
 /* ────────────────────────────────────────────────────────────────── */
-app.use('/api/auth', authRoute);
+app.use("/api/auth", authRoute);
 
 /* ────────────────────────────────────────────────────────────────── */
 /* 7) Protected payments (all except webhook)                          */
 /* ────────────────────────────────────────────────────────────────── */
-app.use('/api/payments', requireAuth, paymentsRoute);
+app.use("/api/payments", requireAuth, paymentsRoute);
 
 /* ────────────────────────────────────────────────────────────────── */
 /* 8) Other protected routes                                           */
 /* ────────────────────────────────────────────────────────────────── */
-app.use('/api/users', requireAuth, usersRoute);
-app.use('/api/cards', requireAuth, cardsRoute);
-app.use('/api/notifications', requireAuth, notificationsRoute);
-app.use('/api/subscriptions', requireAuth, subscriptionsRoute);
+app.use("/api/users", requireAuth, usersRoute);
+app.use("/api/cards", requireAuth, cardsRoute);
+app.use("/api/notifications", requireAuth, notificationsRoute);
+app.use("/api/subscriptions", requireAuth, subscriptionsRoute);
 
 const chatLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 20,
-  message: { error: 'Too many requests – please slow down.' },
+  message: { error: "Too many requests – please slow down." },
 });
-app.use('/api/chat', requireAuth, chatLimiter, aiChatRoute);
-app.use('/api/chats', requireAuth, sessionsRoute);
+app.use("/api/chat", requireAuth, chatLimiter, aiChatRoute);
+app.use("/api/chats", requireAuth, sessionsRoute);
 
 /* ────────────────────────────────────────────────────────────────── */
 /* 9) Health‐check                                                     */
 /* ────────────────────────────────────────────────────────────────── */
-app.get('/api/ping', (_req, res) => res.json({ ok: true }));
+app.get("/api/ping", (_req, res) => res.json({ ok: true }));
 
 /* ────────────────────────────────────────────────────────────────── */
 /* 9.5) Root route                                                     */
 /* ────────────────────────────────────────────────────────────────── */
-app.get('/', (_req, res) => {
-  res.send('🚀 DentGo Backend is live!');
+app.get("/", (_req, res) => {
+  res.send("🚀 DentGo Backend is live!");
 });
 
 /* ────────────────────────────────────────────────────────────────── */
 /* 10) Global error handler                                            */
 /* ────────────────────────────────────────────────────────────────── */
 app.use((err, _req, res, _next) => {
-  console.error('Unhandled error:', err);
-  if (err.message && err.message.startsWith('CORS:')) {
+  console.error("Unhandled error:", err);
+  if (err.message && err.message.startsWith("CORS:")) {
     return res.status(403).json({ error: err.message });
   }
-  res.status(500).json({ error: 'Internal Server Error' });
+  res.status(500).json({ error: "Internal Server Error" });
 });
 
 /* ────────────────────────────────────────────────────────────────── */

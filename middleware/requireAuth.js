@@ -1,10 +1,10 @@
-// middleware/requireAuth.js
-const jwt = require('jsonwebtoken');
+// backend/middleware/requireAuth.js
+const jwt = require("jsonwebtoken");
 
 module.exports = function requireAuth(req, res, next) {
   const token = req.cookies.accessToken;
   if (!token) {
-    return res.status(401).json({ error: 'Missing auth token' });
+    return res.status(401).json({ error: "Missing auth token" });
   }
 
   try {
@@ -12,7 +12,7 @@ module.exports = function requireAuth(req, res, next) {
     req.user = payload; // { id, email, role, ... }
     next();
   } catch (err) {
-    console.error('JWT verify failed:', err);
-    return res.status(401).json({ error: 'Invalid or expired token' });
+    console.error("JWT verify failed:", err);
+    return res.status(401).json({ error: "Invalid or expired token" });
   }
 };
