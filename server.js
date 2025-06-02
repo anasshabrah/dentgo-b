@@ -1,3 +1,4 @@
+// server.js
 require('dotenv').config({ override: true });
 
 const express = require('express');
@@ -54,7 +55,7 @@ app.use(
     },
     credentials: true,
     allowedHeaders: ['Content-Type'],
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   })
 );
 

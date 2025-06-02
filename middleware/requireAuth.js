@@ -1,4 +1,4 @@
-// C:\Users\hanos\cb\backend\middleware\requireAuth.js
+// middleware/requireAuth.js
 const jwt = require('jsonwebtoken');
 
 module.exports = function requireAuth(req, res, next) {

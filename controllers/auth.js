@@ -1,3 +1,4 @@
+// controllers/auth.js
 require('dotenv').config({ override: true });
 
 const express = require('express');
@@ -15,7 +16,7 @@ const requireAuth = require('../middleware/requireAuth');
 const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;
 const REFRESH_TTL = +process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60;
 
-const googleClient = new OAuth2Client(process.env.REACT_APP_GOOGLE_CLIENT_ID);
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 /* ─────────────── JWT Helpers ─────────────── */
 function signAccess(user) {
@@ -40,15 +41,19 @@ async function issueRefresh(user) {
 }
 
 function setAuthCookies(res, access, refresh) {
+  const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || 'dentgo.io';
+
   const cookieOptions = {
     httpOnly: true,
-    secure: true,                // Use HTTPS for secure cookies
-    sameSite: 'none',            // Required for cross-site cookies
+    secure: true,
+    sameSite: 'none',
+    domain: COOKIE_DOMAIN,
   };
 
   res.cookie('accessToken', access, {
     ...cookieOptions,
     maxAge: ACCESS_TTL * 1000,
+    path: '/',
   });
   res.cookie('refreshToken', refresh, {
     ...cookieOptions,
@@ -106,7 +111,7 @@ router.get('/google/callback',
   }
 );
 
-/* ─────────────── Google One Tap login (One Tap) ─────────────── */
+/* ─────────────── Google One Tap login ─────────────── */
 router.post('/google', async (req, res) => {
   const { credential } = req.body;
   if (!credential) return res.status(400).json({ error: 'Missing credential' });
@@ -114,7 +119,7 @@ router.post('/google', async (req, res) => {
   try {
     const ticket = await googleClient.verifyIdToken({
       idToken: credential,
-      audience: process.env.REACT_APP_GOOGLE_CLIENT_ID,
+      audience: process.env.GOOGLE_CLIENT_ID,
     });
 
     const { sub: providerUserId, name, email, picture } = ticket.getPayload();
@@ -141,7 +146,7 @@ router.post('/google', async (req, res) => {
   }
 });
 
-/* ─────────────── Apple OAuth (existing) ─────────────── */
+/* ─────────────── Apple OAuth ─────────────── */
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((obj, done) => done(null, obj));
 
@@ -229,8 +234,16 @@ router.post('/logout', async (req, res) => {
         .then(match => match ? prisma.refreshToken.delete({ where: { id: t.id } }) : null)
     ));
   }
-  res.clearCookie('accessToken', { secure: true, sameSite: 'none' });
-  res.clearCookie('refreshToken', { path: '/api/auth/refresh', secure: true, sameSite: 'none' });
+
+  const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || 'dentgo.io';
+  const clearOpts = {
+    domain: COOKIE_DOMAIN,
+    secure: true,
+    sameSite: 'none',
+  };
+
+  res.clearCookie('accessToken', { ...clearOpts, path: '/' });
+  res.clearCookie('refreshToken', { ...clearOpts, path: '/api/auth/refresh' });
   res.status(204).end();
 });
 
