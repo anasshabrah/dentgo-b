@@ -1,4 +1,4 @@
-// controllers/auth.js
+// backend/controllers/auth.js
 require('dotenv').config({ override: true });
 
 const express = require('express');
@@ -41,66 +41,68 @@ async function issueRefresh(user) {
 }
 
 function setAuthCookies(res, access, refresh) {
-  const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || 'dentgo.io';
-
+  // During development (http://localhost), allow secure:false.
   const cookieOptions = {
     httpOnly: true,
-    secure: true,
+    secure: process.env.NODE_ENV === 'production', // only true in production (HTTPS)
     sameSite: 'none',
-    domain: COOKIE_DOMAIN,
+    path: '/', // send on all requests
   };
 
+  // 1) Set accessToken cookie (on path '/')
   res.cookie('accessToken', access, {
     ...cookieOptions,
     maxAge: ACCESS_TTL * 1000,
-    path: '/',
   });
+
+  // 2) Set refreshToken cookie (on path '/')
   res.cookie('refreshToken', refresh, {
     ...cookieOptions,
     maxAge: REFRESH_TTL * 1000,
-    path: '/api/auth/refresh',
+    // no longer restricted to '/api/auth/refresh'
   });
 }
 
 /* ─────────────── Google OAuth (Traditional) ─────────────── */
-passport.use(new GoogleStrategy(
-  {
-    clientID: process.env.GOOGLE_CLIENT_ID,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: '/api/auth/google/callback',
-  },
-  async (accessToken, refreshToken, profile, done) => {
-    try {
-      const email = profile.emails?.[0]?.value;
-      const name = profile.displayName;
-      const picture = profile.photos?.[0]?.value;
-      const providerUserId = profile.id;
+passport.use(
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: '/api/auth/google/callback',
+    },
+    async (accessToken, refreshToken, profile, done) => {
+      try {
+        const email = profile.emails?.[0]?.value;
+        const name = profile.displayName;
+        const picture = profile.photos?.[0]?.value;
+        const providerUserId = profile.id;
 
-      const user = await prisma.user.upsert({
-        where: { email },
-        update: { name, picture },
-        create: { name, email, picture },
-      });
+        const user = await prisma.user.upsert({
+          where: { email },
+          update: { name, picture },
+          create: { name, email, picture },
+        });
 
-      await prisma.oAuthAccount.upsert({
-        where: { provider_providerUserId: { provider: 'google', providerUserId } },
-        update: {},
-        create: { provider: 'google', providerUserId, userId: user.id },
-      });
+        await prisma.oAuthAccount.upsert({
+          where: { provider_providerUserId: { provider: 'google', providerUserId } },
+          update: {},
+          create: { provider: 'google', providerUserId, userId: user.id },
+        });
 
-      return done(null, user);
-    } catch (err) {
-      console.error('GoogleStrategy error:', err);
-      done(err, null);
+        return done(null, user);
+      } catch (err) {
+        console.error('GoogleStrategy error:', err);
+        done(err, null);
+      }
     }
-  }
-));
-
-router.get('/google',
-  passport.authenticate('google', { scope: ['profile', 'email'] })
+  )
 );
 
-router.get('/google/callback',
+router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+
+router.get(
+  '/google/callback',
   passport.authenticate('google', { session: false, failureRedirect: '/LetsYouIn' }),
   async (req, res) => {
     const user = req.user;
@@ -111,7 +113,7 @@ router.get('/google/callback',
   }
 );
 
-/* ─────────────── Google One Tap login ─────────────── */
+/* ─────────────── Google One Tap login (One Tap) ─────────────── */
 router.post('/google', async (req, res) => {
   const { credential } = req.body;
   if (!credential) return res.status(400).json({ error: 'Missing credential' });
@@ -146,31 +148,34 @@ router.post('/google', async (req, res) => {
   }
 });
 
-/* ─────────────── Apple OAuth ─────────────── */
+/* ─────────────── Apple OAuth (existing) ─────────────── */
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((obj, done) => done(null, obj));
 
-passport.use(new AppleStrategy(
-  {
-    clientID: process.env.APPLE_CLIENT_ID,
-    teamID: process.env.APPLE_TEAM_ID,
-    keyID: process.env.APPLE_KEY_ID,
-    privateKey: process.env.APPLE_PRIVATE_KEY,
-    callbackURL: `${process.env.FRONTEND_ORIGIN}/api/auth/apple/callback`,
-    scope: ['name', 'email'],
-  },
-  (accessToken, refreshToken, idToken, profile, done) => {
-    done(null, {
-      providerUserId: profile.id,
-      email: profile.email,
-      name: `${profile.name?.givenName || ''} ${profile.name?.familyName || ''}`.trim(),
-    });
-  }
-));
+passport.use(
+  new AppleStrategy(
+    {
+      clientID: process.env.APPLE_CLIENT_ID,
+      teamID: process.env.APPLE_TEAM_ID,
+      keyID: process.env.APPLE_KEY_ID,
+      privateKey: process.env.APPLE_PRIVATE_KEY,
+      callbackURL: `${process.env.FRONTEND_ORIGIN}/api/auth/apple/callback`,
+      scope: ['name', 'email'],
+    },
+    (accessToken, refreshToken, idToken, profile, done) => {
+      done(null, {
+        providerUserId: profile.id,
+        email: profile.email,
+        name: `${profile.name?.givenName || ''} ${profile.name?.familyName || ''}`.trim(),
+      });
+    }
+  )
+);
 
 router.get('/apple', passport.authenticate('apple'));
 
-router.post('/apple/callback',
+router.post(
+  '/apple/callback',
   passport.authenticate('apple', { session: false, failureRedirect: '/LetsYouIn' }),
   async (req, res) => {
     try {
@@ -204,6 +209,7 @@ router.post('/refresh', async (req, res) => {
   const { refreshToken } = req.cookies;
   if (!refreshToken) return res.status(401).json({ error: 'No refresh token' });
 
+  // Find all unexpired refresh tokens
   const tokens = await prisma.refreshToken.findMany({
     where: { expiresAt: { gt: new Date() } },
     include: { user: true },
@@ -218,6 +224,7 @@ router.post('/refresh', async (req, res) => {
   }
   if (!stored) return res.status(401).json({ error: 'Invalid refresh token' });
 
+  // Delete old token & issue a new one
   await prisma.refreshToken.delete({ where: { id: stored.id } });
   const newRefresh = await issueRefresh(stored.user);
   const newAccess = signAccess(stored.user);
@@ -229,21 +236,17 @@ router.post('/logout', async (req, res) => {
   const { refreshToken } = req.cookies;
   if (refreshToken) {
     const tokens = await prisma.refreshToken.findMany();
-    await Promise.all(tokens.map(t =>
-      bcrypt.compare(refreshToken, t.tokenHash)
-        .then(match => match ? prisma.refreshToken.delete({ where: { id: t.id } }) : null)
-    ));
+    await Promise.all(
+      tokens.map((t) =>
+        bcrypt
+          .compare(refreshToken, t.tokenHash)
+          .then((match) => (match ? prisma.refreshToken.delete({ where: { id: t.id } }) : null))
+      )
+    );
   }
-
-  const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || 'dentgo.io';
-  const clearOpts = {
-    domain: COOKIE_DOMAIN,
-    secure: true,
-    sameSite: 'none',
-  };
-
-  res.clearCookie('accessToken', { ...clearOpts, path: '/' });
-  res.clearCookie('refreshToken', { ...clearOpts, path: '/api/auth/refresh' });
+  // Clear both cookies
+  res.clearCookie('accessToken', { secure: process.env.NODE_ENV === 'production', sameSite: 'none', path: '/' });
+  res.clearCookie('refreshToken', { secure: process.env.NODE_ENV === 'production', sameSite: 'none', path: '/' });
   res.status(204).end();
 });
 
