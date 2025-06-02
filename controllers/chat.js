@@ -1,3 +1,4 @@
+// backend/controllers/chat.js
 require("dotenv").config({ override: true });
 
 const express = require("express");
@@ -89,7 +90,7 @@ router.post("/", async (req, res) => {
     // Real answer: include full history + latest user turn
     const targetModel = process.env.GPT_MODEL;
     if (!targetModel) {
-      console.error("❌ GPT4T_MODEL missing from .env");
+      console.error("❌ GPT_MODEL missing from .env");
       return res.status(500).json({ error: "Server misconfiguration" });
     }
 

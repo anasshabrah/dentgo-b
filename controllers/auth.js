@@ -158,7 +158,8 @@ passport.use(
       teamID: process.env.APPLE_TEAM_ID,
       keyID: process.env.APPLE_KEY_ID,
       privateKey: process.env.APPLE_PRIVATE_KEY,
-      callbackURL: `${process.env.FRONTEND_ORIGIN}/api/auth/apple/callback`,
+      // NOW points at the backend’s callback, not FRONTEND_ORIGIN
+      callbackURL: process.env.APPLE_CALLBACK_URL,
       scope: ["name", "email"],
     },
     (accessToken, refreshToken, idToken, profile, done) => {
@@ -209,7 +210,7 @@ router.post("/refresh", async (req, res) => {
   const { refreshToken } = req.cookies;
   if (!refreshToken) return res.status(401).json({ error: "No refresh token" });
 
-  // Find all unexpired refresh tokens
+  // Find all unexpired refresh tokens (for performance, you could add a cron job to delete expired tokens regularly)
   const tokens = await prisma.refreshToken.findMany({
     where: { expiresAt: { gt: new Date() } },
     include: { user: true },
@@ -232,18 +233,27 @@ router.post("/refresh", async (req, res) => {
   res.json({ user: stored.user });
 });
 
-router.post("/logout", async (req, res) => {
+router.post("/logout", requireAuth, async (req, res) => {
   const { refreshToken } = req.cookies;
   if (refreshToken) {
-    const tokens = await prisma.refreshToken.findMany();
+    // ONLY fetch this user’s tokens (much smaller set)
+    const tokens = await prisma.refreshToken.findMany({
+      where: { userId: req.user.id },
+    });
+
     await Promise.all(
       tokens.map((t) =>
         bcrypt
           .compare(refreshToken, t.tokenHash)
-          .then((match) => (match ? prisma.refreshToken.delete({ where: { id: t.id } }) : null))
+          .then((match) =>
+            match
+              ? prisma.refreshToken.delete({ where: { id: t.id } })
+              : null
+          )
       )
     );
   }
+
   // Clear both cookies (root path)
   res.clearCookie("accessToken", {
     secure: process.env.NODE_ENV === "production",

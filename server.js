@@ -16,7 +16,10 @@ const notificationsRoute = require("./controllers/notifications");
 const subscriptionsRoute = require("./controllers/subscriptions");
 const aiChatRoute = require("./controllers/chat");
 const sessionsRoute = require("./controllers/chats");
-const paymentsRoute = require("./controllers/payments");
+
+// NOTE: paymentsRoute now exports { webhookHandler, paymentsRouter }
+const { webhookHandler, paymentsRouter } = require("./controllers/payments");
+
 const requireAuth = require("./middleware/requireAuth");
 
 const app = express();
@@ -76,7 +79,7 @@ app.use(cookieParser());
 app.post(
   "/api/payments/webhook",
   express.raw({ type: "application/json" }),
-  paymentsRoute
+  webhookHandler
 );
 
 /* ────────────────────────────────────────────────────────────────── */
@@ -97,7 +100,7 @@ app.use("/api/auth", authRoute);
 /* ────────────────────────────────────────────────────────────────── */
 /* 7) Protected payments (all except webhook)                          */
 /* ────────────────────────────────────────────────────────────────── */
-app.use("/api/payments", requireAuth, paymentsRoute);
+app.use("/api/payments", requireAuth, paymentsRouter);
 
 /* ────────────────────────────────────────────────────────────────── */
 /* 8) Other protected routes                                           */
