@@ -125,7 +125,7 @@ app.use("/api/chat", requireAuth, chatLimiter, aiChatRoute);
 app.use("/api/chats", requireAuth, sessionsRoute);
 
 /* ────────────────────────────────────────────────────────────────── */
-/* 9) Health-check / root                                              */
+/* 9) Health‐check / root                                              */
 /* ────────────────────────────────────────────────────────────────── */
 app.get("/api/ping", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) => {

@@ -1,15 +1,16 @@
 // backend/controllers/payments.js
+
 const express = require("express");
 const router = express.Router();
 const { PrismaClient } = require("@prisma/client");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
-const bodyParser = require("body-parser");
 const requireAuth = require("../middleware/requireAuth");
 
 const prisma = new PrismaClient();
 
 /**
  * ─── Create or retrieve a Stripe Customer for the authenticated user ───
+ * POST /api/payments/create-customer
  */
 router.post(
   "/create-customer",
@@ -47,7 +48,140 @@ router.post(
 );
 
 /**
+ * ─── Create a SetupIntent for saving a card ───
+ * POST /api/payments/create-setup-intent
+ *
+ * Body: none
+ * Response: { clientSecret: string }
+ *
+ * Frontend must then do:
+ *   const { setupIntent, error } = await stripe.confirmCardSetup(clientSecret, {
+ *     payment_method: {
+ *       card: CardElement,
+ *       billing_details: { name: user.name, email: user.email }
+ *     }
+ *   });
+ * Stripe will automatically attach the new PaymentMethod to the customer on success.
+ */
+router.post(
+  "/create-setup-intent",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const userId = req.user.id;
+      // Fetch or create Stripe customer
+      const existingUser = await prisma.user.findUnique({
+        where: { id: userId },
+      });
+      if (!existingUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      let customerId = existingUser.stripeCustomerId;
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: existingUser.email,
+          name: existingUser.name,
+        });
+        customerId = customer.id;
+        await prisma.user.update({
+          where: { id: userId },
+          data: { stripeCustomerId: customer.id },
+        });
+      }
+
+      // Create SetupIntent for this customer
+      const setupIntent = await stripe.setupIntents.create({
+        customer: customerId,
+        usage: "off_session",
+      });
+
+      return res.json({ clientSecret: setupIntent.client_secret });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * ─── Create a one-time PaymentIntent ───
+ * POST /api/payments/create-payment-intent
+ *
+ * Body: { amount: number, currency: string }
+ * Response: { clientSecret: string }
+ *
+ * Frontend must then do:
+ *   const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+ *     payment_method: {
+ *       card: CardElement,
+ *       billing_details: { name: user.name, email: user.email }
+ *     }
+ *   });
+ */
+router.post(
+  "/create-payment-intent",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const userId = req.user.id;
+      const { amount, currency } = req.body || {};
+      if (!amount || !currency) {
+        return res
+          .status(400)
+          .json({ error: "Missing amount or currency in request body" });
+      }
+
+      // Ensure user has a Stripe customer
+      const existingUser = await prisma.user.findUnique({
+        where: { id: userId },
+      });
+      if (!existingUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      let customerId = existingUser.stripeCustomerId;
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: existingUser.email,
+          name: existingUser.name,
+        });
+        customerId = customer.id;
+        await prisma.user.update({
+          where: { id: userId },
+          data: { stripeCustomerId: customer.id },
+        });
+      }
+
+      // Create a PaymentIntent
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount,
+        currency,
+        customer: customerId,
+        automatic_payment_methods: { enabled: true },
+      });
+
+      return res.json({ clientSecret: paymentIntent.client_secret });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
  * ─── Create a new Subscription in Stripe and persist locally ───
+ * POST /api/payments/create-subscription
+ *
+ * Body: { priceId: string, paymentMethodId: string }
+ * Response:
+ *   {
+ *     subscriptionId: string,
+ *     clientSecret: string,
+ *     status: string
+ *   }
+ *
+ * Frontend will do:
+ *   stripe.confirmCardPayment(clientSecret)
+ * (the Subscription creation returned client_secret on the first invoice)
  */
 router.post(
   "/create-subscription",
@@ -55,7 +189,7 @@ router.post(
   async (req, res, next) => {
     try {
       const userId = req.user.id;
-      const { priceId: frontendPriceId, paymentMethodId } = req.body;
+      const { priceId: frontendPriceId, paymentMethodId } = req.body || {};
 
       const priceId = frontendPriceId || process.env.STRIPE_PRICE_ID;
       if (!priceId) {
@@ -71,24 +205,24 @@ router.post(
           .json({ error: "Stripe customer not found for user" });
       }
 
-      // Attach payment method to customer
+      // 1) Attach payment method to customer
       await stripe.paymentMethods.attach(paymentMethodId, {
         customer: user.stripeCustomerId,
       });
 
-      // Set it as default payment method
+      // 2) Set it as default payment method on the customer
       await stripe.customers.update(user.stripeCustomerId, {
         invoice_settings: { default_payment_method: paymentMethodId },
       });
 
-      // Create subscription on Stripe
+      // 3) Create subscription on Stripe
       const subscription = await stripe.subscriptions.create({
         customer: user.stripeCustomerId,
         items: [{ price: priceId }],
         expand: ["latest_invoice.payment_intent"],
       });
 
-      // Record in Prisma
+      // 4) Record subscription in Prisma
       const newSub = await prisma.subscription.create({
         data: {
           plan:
@@ -119,11 +253,6 @@ router.post(
     }
   }
 );
-
-/**
- * ─── PROTECTED ROUTER ─── all other /api/payments/* endpoints go here
- */
-const paymentsRouter = router;
 
 /**
  * ─── Webhook handler (unprotected, raw JSON) ───
@@ -181,5 +310,5 @@ async function webhookHandler(req, res) {
 
 module.exports = {
   webhookHandler,
-  paymentsRouter,
+  paymentsRouter: router,
 };

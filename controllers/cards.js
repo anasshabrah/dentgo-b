@@ -1,10 +1,10 @@
-const express     = require("express");
-const router      = express.Router();
-const prisma      = require("../lib/prismaClient");
-const stripe      = require("stripe")(process.env.STRIPE_SECRET_KEY);
+// backend/controllers/cards.js
+const express = require("express");
+const router = express.Router();
+const prisma = require("../lib/prismaClient");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 // All routes under /api/cards are already protected by requireAuth in server.js.
-// (e.g. app.use("/api/cards", requireAuth, cardsRoute))
 
 /**
  * GET /api/cards
@@ -51,9 +51,10 @@ router.get("/:id", async (req, res) => {
  * Body: { paymentMethodId: string, nickName?: string }
  *
  * 1. Verify user & stripeCustomerId.
- * 2. Attach the PaymentMethod to Stripe customer.
- * 3. Extract card details from Stripe's response.
- * 4. Save a new Card row in Prisma.
+ * 2. Attach the PaymentMethod to Stripe customer (already created via Setup Intent).
+ * 3. Optionally make it the default payment method on the customer.
+ * 4. Extract card details from Stripe's PaymentMethod object.
+ * 5. Save a new Card row in Prisma.
  */
 router.post("/", async (req, res) => {
   const userId = req.user.id;
@@ -76,7 +77,7 @@ router.post("/", async (req, res) => {
     }
 
     // 2) Attach the PaymentMethod to the existing Stripe Customer
-    const pm = await stripe.paymentMethods.attach(paymentMethodId, {
+    await stripe.paymentMethods.attach(paymentMethodId, {
       customer: user.stripeCustomerId,
     });
 
@@ -85,17 +86,18 @@ router.post("/", async (req, res) => {
       invoice_settings: { default_payment_method: paymentMethodId },
     });
 
-    // 4) Extract card details from pm.card
+    // 4) Retrieve PaymentMethod to read card details
+    const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
     const cardData = pm.card;
     if (!cardData) {
       return res.status(400).json({ error: "PaymentMethod is not a card" });
     }
 
-    const network    = cardData.brand.toUpperCase(); // e.g. "VISA"
-    const type       = cardData.funding === "debit" ? "DEBIT" : "CREDIT";
-    const last4      = cardData.last4;
-    const expMonth   = cardData.exp_month;
-    const expYear    = cardData.exp_year;
+    const network = cardData.brand.toUpperCase(); // e.g. "VISA"
+    const type = cardData.funding === "debit" ? "DEBIT" : "CREDIT";
+    const last4 = cardData.last4;
+    const expMonth = cardData.exp_month;
+    const expYear = cardData.exp_year;
 
     // 5) Persist a new Card row
     const newCard = await prisma.card.create({
