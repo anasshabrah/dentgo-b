@@ -42,7 +42,7 @@ if (!FRONTEND_ORIGIN) {
 // We also allow "https://dentgo.io" (if you host a second domain), plus any preview under dentgo-*.vercel.app
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
-  "https://dentgo.io",
+  "http://localhost:3000",
 ];
 const VERCEL_REGEX = /^https:\/\/dentgo.*\.vercel\.app$/;
 
@@ -70,9 +70,12 @@ app.use(
       }
       return callback(new Error(`CORS: origin "${origin}" not allowed`));
     },
-    credentials: true,                    // <–– must be true to send/receive cookies
-    allowedHeaders: ["Content-Type"],     // Only need Content-Type for JSON bodies
+    credentials: true,                    // Allow cookies to be sent and received
+    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"], // Add any custom headers you use
+    exposedHeaders: ["Set-Cookie"],       // Optional: allows frontend to read Set-Cookie if needed
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    optionsSuccessStatus: 204,            // For legacy browsers that choke on 200
+    maxAge: 86400                         // Cache preflight requests for 24 hours
   })
 );
 
@@ -109,7 +112,7 @@ app.use("/api/auth", authRoute);
 app.use("/api/payments", requireAuth, paymentsRouter);
 
 /* ────────────────────────────────────────────────────────────────── */
-/* 8) Other protected routes                                           */
+/* 8) Other protected routes                                          */
 /* ────────────────────────────────────────────────────────────────── */
 app.use("/api/users", requireAuth, usersRoute);
 app.use("/api/cards", requireAuth, cardsRoute);
@@ -125,7 +128,7 @@ app.use("/api/chat", requireAuth, chatLimiter, aiChatRoute);
 app.use("/api/chats", requireAuth, sessionsRoute);
 
 /* ────────────────────────────────────────────────────────────────── */
-/* 9) Health‐check / root                                              */
+/* 9) Health‐check / root                                             */
 /* ────────────────────────────────────────────────────────────────── */
 app.get("/api/ping", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) => {
