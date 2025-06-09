@@ -7,13 +7,12 @@
 export function authCookieOpts() {
   const base = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production', // secure only in production
-    sameSite: 'none', // cross-origin cookies
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'none',
     path: '/',
   };
 
   if (process.env.NODE_ENV === 'production') {
-    // Use env override if available; fallback to base domain
     base.domain = process.env.COOKIE_DOMAIN || '.dentgo.io';
   }
 
@@ -26,7 +25,7 @@ export function authCookieOpts() {
  */
 export function clearCookieOpts() {
   const opts = {
-    httpOnly: true, // added this to match authCookieOpts
+    httpOnly: true,  // matches authCookieOpts
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'none',
     path: '/',
