@@ -22,6 +22,7 @@ function signAccess(user) {
     { expiresIn: ACCESS_TTL }
   );
 }
+
 async function issueRefresh(user) {
   const raw = uuid();
   const hash = await bcrypt.hash(raw, 10);
@@ -41,6 +42,7 @@ function setAuthCookies(res, access, refresh) {
   res.cookie('accessToken', access, { ...opts, maxAge: ACCESS_TTL * 1000 });
   res.cookie('refreshToken', refresh, { ...opts, maxAge: REFRESH_TTL * 1000 });
 }
+
 function clearAuthCookies(res) {
   const opts = clearCookieOpts();
   res.clearCookie('accessToken', opts);
@@ -48,7 +50,8 @@ function clearAuthCookies(res) {
 }
 
 // ───────── Google OAuth via Passport ─────────
-router.get('/google', passport.authenticate('google', { scope: ['profile','email'] }));
+router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+
 router.get(
   '/google/callback',
   passport.authenticate('google', { session: false, failureRedirect: '/LetsYouIn' }),
@@ -96,6 +99,7 @@ router.post('/google', async (req, res) => {
 
 // ───────── Apple OAuth Callback ─────────
 router.get('/apple', passport.authenticate('apple'));
+
 router.post(
   '/apple/callback',
   passport.authenticate('apple', { session: false, failureRedirect: '/LetsYouIn' }),
@@ -132,6 +136,7 @@ router.post('/refresh', async (req, res) => {
     where: { expiresAt: { gt: new Date() } },
     include: { user: true },
   });
+
   let match = null;
   for (const r of records) {
     if (await bcrypt.compare(token, r.tokenHash)) {
@@ -139,6 +144,7 @@ router.post('/refresh', async (req, res) => {
       break;
     }
   }
+
   if (!match) return res.status(401).json({ error: 'Invalid refresh token' });
 
   await prisma.refreshToken.delete({ where: { id: match.id } });
@@ -159,25 +165,39 @@ router.post('/logout', requireAuth, async (req, res) => {
 router.delete('/delete', requireAuth, async (req, res) => {
   const userId = req.user.id;
   try {
-    // delete all messages & sessions atomically
+    console.log(`Deleting account for user ID: ${userId}`);
     const sessions = await prisma.chatSession.findMany({
       where: { userId },
-      select: { id: true }
+      select: { id: true },
     });
-    const chatIds = sessions.map(s => s.id);
-    await prisma.$transaction([
-      prisma.message.deleteMany({ where: { chatId: { in: chatIds } } }),
-      prisma.chatSession.deleteMany({ where: { userId } }),
-      prisma.refreshToken.deleteMany({ where: { userId } }),
-      prisma.card.deleteMany({ where: { userId } }),
-      prisma.notification.deleteMany({ where: { userId } }),
-      prisma.subscription.deleteMany({ where: { userId } }),
-      prisma.user.delete({ where: { id: userId } })
-    ]);
+    const chatIds = sessions.map((s) => s.id);
+
+    console.log('Deleting messages...');
+    await prisma.message.deleteMany({ where: { chatId: { in: chatIds } } });
+
+    console.log('Deleting chat sessions...');
+    await prisma.chatSession.deleteMany({ where: { userId } });
+
+    console.log('Deleting refresh tokens...');
+    await prisma.refreshToken.deleteMany({ where: { userId } });
+
+    console.log('Deleting cards...');
+    await prisma.card.deleteMany({ where: { userId } });
+
+    console.log('Deleting notifications...');
+    await prisma.notification.deleteMany({ where: { userId } });
+
+    console.log('Deleting subscriptions...');
+    await prisma.subscription.deleteMany({ where: { userId } });
+
+    console.log('Deleting user record...');
+    await prisma.user.delete({ where: { id: userId } });
+
     clearAuthCookies(res);
+    console.log(`✅ Successfully deleted account for user ID: ${userId}`);
     res.status(204).end();
   } catch (err) {
-    console.error('Delete account error:', err);
+    console.error('❌ Delete account error:', err);
     res.status(500).json({ error: 'Failed to delete account' });
   }
 });
