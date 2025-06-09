@@ -47,28 +47,35 @@ app.use((req, res, next) => {
   console.log(`Cookies:`, req.headers.cookie);
   next();
 });
-app.use(cors({
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    if (ALLOWED_ORIGINS.includes(origin) || VERCEL_REGEX.test(origin)) {
-      return cb(null, true);
-    }
-    cb(new Error(`CORS: origin "${origin}" not allowed`));
-  },
-  credentials: true,
-  allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
-  exposedHeaders: ["Set-Cookie"],
-  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
-  optionsSuccessStatus: 204,
-  maxAge: 86400,
-}));
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // allow requests with no origin (e.g. mobile apps, curl)
+      if (!origin) return cb(null, true);
+      if (ALLOWED_ORIGINS.includes(origin) || VERCEL_REGEX.test(origin)) {
+        return cb(null, true);
+      }
+      cb(new Error(`CORS: origin "${origin}" not allowed`));
+    },
+    credentials: true,                // <-- allow cookies to be sent
+    methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
+    exposedHeaders: ["Set-Cookie"],
+    optionsSuccessStatus: 204,
+    maxAge: 86400,
+  })
+);
 
 // 3) Cookies & JSON
 app.use(cookieParser());
 app.use(express.json());
 
 // 4) Stripe webhook (raw body)
-app.post("/api/payments/webhook", express.raw({ type: "application/json" }), webhookHandler);
+app.post(
+  "/api/payments/webhook",
+  express.raw({ type: "application/json" }),
+  webhookHandler
+);
 
 // 5) Passport
 app.use(passport.initialize());
@@ -95,7 +102,9 @@ app.use("/api/chats", requireAuth, sessionsRoute);
 
 // 9) Health‐check / root
 app.get("/api/ping", (_req, res) => res.json({ ok: true }));
-app.get("/", (_req, res) => res.send("🚀 DentGo Backend is live!"));
+app.get("/", (_req, res) =>
+  res.send("🚀 DentGo Backend is live!")
+);
 
 // 10) Global error handler
 app.use((err, _req, res, _next) => {
