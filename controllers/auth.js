@@ -159,7 +159,6 @@ passport.use(
 );
 
 router.get("/apple", passport.authenticate("apple"));
-
 router.post(
   "/apple/callback",
   passport.authenticate("apple", { session: false, failureRedirect: "/LetsYouIn" }),
@@ -235,23 +234,34 @@ router.post("/logout", requireAuth, async (req, res) => {
 router.delete("/delete", requireAuth, async (req, res) => {
   const userId = req.user.id;
 
-  // 1) Remove all refresh tokens for this user
-  await prisma.refreshToken.deleteMany({ where: { userId } });
+  try {
+    // 1) Remove all refresh tokens for this user
+    await prisma.refreshToken.deleteMany({ where: { userId } });
 
-  // 2) Delete the user record
-  await prisma.user.delete({ where: { id: userId } });
+    // 2) Remove dependent records to satisfy foreign key constraints
+    await prisma.chatSession.deleteMany({ where: { userId } });
+    await prisma.card.deleteMany({ where: { userId } });
+    await prisma.notification.deleteMany({ where: { userId } });
+    await prisma.subscription.deleteMany({ where: { userId } });
 
-  // 3) Clear auth cookies
-  const opts = {
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "none",
-    path: "/",
-  };
-  res.clearCookie("accessToken", opts);
-  res.clearCookie("refreshToken", opts);
+    // 3) Delete the user record
+    await prisma.user.delete({ where: { id: userId } });
 
-  // 4) Done
-  res.status(204).end();
+    // 4) Clear auth cookies
+    const opts = {
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "none",
+      path: "/",
+    };
+    res.clearCookie("accessToken", opts);
+    res.clearCookie("refreshToken", opts);
+
+    // 5) Done
+    res.status(204).end();
+  } catch (err) {
+    console.error("Delete account error:", err);
+    res.status(500).json({ error: "Failed to delete account" });
+  }
 });
 
 module.exports = router;
