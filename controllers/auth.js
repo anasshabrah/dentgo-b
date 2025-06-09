@@ -172,26 +172,16 @@ router.delete('/delete', requireAuth, async (req, res) => {
     });
     const chatIds = sessions.map((s) => s.id);
 
-    console.log('Deleting messages...');
-    await prisma.message.deleteMany({ where: { chatId: { in: chatIds } } });
-
-    console.log('Deleting chat sessions...');
-    await prisma.chatSession.deleteMany({ where: { userId } });
-
-    console.log('Deleting refresh tokens...');
-    await prisma.refreshToken.deleteMany({ where: { userId } });
-
-    console.log('Deleting cards...');
-    await prisma.card.deleteMany({ where: { userId } });
-
-    console.log('Deleting notifications...');
-    await prisma.notification.deleteMany({ where: { userId } });
-
-    console.log('Deleting subscriptions...');
-    await prisma.subscription.deleteMany({ where: { userId } });
-
-    console.log('Deleting user record...');
-    await prisma.user.delete({ where: { id: userId } });
+    await prisma.$transaction([
+      prisma.message.deleteMany({ where: { chatId: { in: chatIds } } }),
+      prisma.chatSession.deleteMany({ where: { userId } }),
+      prisma.refreshToken.deleteMany({ where: { userId } }),
+      prisma.card.deleteMany({ where: { userId } }),
+      prisma.notification.deleteMany({ where: { userId } }),
+      prisma.subscription.deleteMany({ where: { userId } }),
+      prisma.oAuthAccount.deleteMany({ where: { userId } }),
+      prisma.user.delete({ where: { id: userId } })
+    ]);
 
     clearAuthCookies(res);
     console.log(`✅ Successfully deleted account for user ID: ${userId}`);
