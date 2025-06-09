@@ -17,7 +17,7 @@ const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;
 const REFRESH_TTL = +process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60;
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-// ─────────────── Helpers ───────────────
+/* ─────────────── JWT Helpers ─────────────── */
 function signAccess(user) {
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role },
@@ -50,7 +50,7 @@ function setAuthCookies(res, access, refresh) {
   res.cookie("refreshToken", refresh, { ...opts, maxAge: REFRESH_TTL * 1000 });
 }
 
-// ─────────────── Google OAuth (traditional) ───────────────
+/* ─────────── Google OAuth (Traditional) ─────────── */
 passport.use(
   new GoogleStrategy(
     {
@@ -72,15 +72,9 @@ passport.use(
         });
 
         await prisma.oAuthAccount.upsert({
-          where: {
-            provider_providerUserId: { provider: "google", providerUserId },
-          },
+          where: { provider_providerUserId: { provider: "google", providerUserId } },
           update: {},
-          create: {
-            provider: "google",
-            providerUserId,
-            userId: user.id,
-          },
+          create: { provider: "google", providerUserId, userId: user.id },
         });
 
         done(null, user);
@@ -93,6 +87,7 @@ passport.use(
 );
 
 router.get("/google", passport.authenticate("google", { scope: ["profile", "email"] }));
+
 router.get(
   "/google/callback",
   passport.authenticate("google", { session: false, failureRedirect: "/LetsYouIn" }),
@@ -105,7 +100,7 @@ router.get(
   }
 );
 
-// ─────────────── Google One-Tap ───────────────
+/* ─────────── Google One-Tap Login ─────────── */
 router.post("/google", async (req, res) => {
   const { credential } = req.body;
   if (!credential) return res.status(400).json({ error: "Missing credential" });
@@ -115,8 +110,8 @@ router.post("/google", async (req, res) => {
       idToken: credential,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
-    const { sub: providerUserId, name, email, picture } = ticket.getPayload();
 
+    const { sub: providerUserId, name, email, picture } = ticket.getPayload();
     const user = await prisma.user.upsert({
       where: { email },
       update: { name, picture },
@@ -124,15 +119,9 @@ router.post("/google", async (req, res) => {
     });
 
     await prisma.oAuthAccount.upsert({
-      where: {
-        provider_providerUserId: { provider: "google", providerUserId },
-      },
+      where: { provider_providerUserId: { provider: "google", providerUserId } },
       update: {},
-      create: {
-        provider: "google",
-        providerUserId,
-        userId: user.id,
-      },
+      create: { provider: "google", providerUserId, userId: user.id },
     });
 
     const access = signAccess(user);
@@ -145,9 +134,9 @@ router.post("/google", async (req, res) => {
   }
 });
 
-// ─────────────── Apple OAuth ───────────────
-passport.serializeUser((u, done) => done(null, u));
-passport.deserializeUser((o, done) => done(null, o));
+/* ─────────── Apple OAuth ─────────── */
+passport.serializeUser((user, done) => done(null, user));
+passport.deserializeUser((obj, done) => done(null, obj));
 
 passport.use(
   new AppleStrategy(
@@ -163,22 +152,20 @@ passport.use(
       done(null, {
         providerUserId: profile.id,
         email: profile.email,
-        name: `${profile.name?.givenName || ""} ${
-          profile.name?.familyName || ""
-        }`.trim(),
+        name: `${profile.name?.givenName || ""} ${profile.name?.familyName || ""}`.trim(),
       });
     }
   )
 );
 
 router.get("/apple", passport.authenticate("apple"));
+
 router.post(
   "/apple/callback",
   passport.authenticate("apple", { session: false, failureRedirect: "/LetsYouIn" }),
   async (req, res) => {
     try {
       const { providerUserId, email, name } = req.user;
-
       const user = await prisma.user.upsert({
         where: { email },
         update: { name },
@@ -186,15 +173,9 @@ router.post(
       });
 
       await prisma.oAuthAccount.upsert({
-        where: {
-          provider_providerUserId: { provider: "apple", providerUserId },
-        },
+        where: { provider_providerUserId: { provider: "apple", providerUserId } },
         update: {},
-        create: {
-          provider: "apple",
-          providerUserId,
-          userId: user.id,
-        },
+        create: { provider: "apple", providerUserId, userId: user.id },
       });
 
       const access = signAccess(user);
@@ -208,7 +189,7 @@ router.post(
   }
 );
 
-// ─────────────── Refresh ───────────────
+/* ─────────── Refresh ─────────── */
 router.post("/refresh", async (req, res) => {
   const token = req.cookies.refreshToken;
   if (!token) return res.status(401).json({ error: "No refresh token" });
@@ -218,7 +199,13 @@ router.post("/refresh", async (req, res) => {
     include: { user: true },
   });
 
-  const match = records.find((r) => bcrypt.compareSync(token, r.tokenHash));
+  let match = null;
+  for (const r of records) {
+    if (await bcrypt.compare(token, r.tokenHash)) {
+      match = r;
+      break;
+    }
+  }
   if (!match) return res.status(401).json({ error: "Invalid refresh token" });
 
   await prisma.refreshToken.delete({ where: { id: match.id } });
@@ -228,19 +215,42 @@ router.post("/refresh", async (req, res) => {
   res.json({ user: match.user });
 });
 
-// ─────────── Optimized Logout ───────────
+/* ─────────── Logout ─────────── */
 router.post("/logout", requireAuth, async (req, res) => {
-  // delete all this user’s refresh tokens in one go
+  // delete all this user’s refresh tokens
   await prisma.refreshToken.deleteMany({ where: { userId: req.user.id } });
 
-  // clear cookies at root
-  const cookieOpts = {
+  // clear cookies
+  const opts = {
     secure: process.env.NODE_ENV === "production",
     sameSite: "none",
     path: "/",
   };
-  res.clearCookie("accessToken", cookieOpts);
-  res.clearCookie("refreshToken", cookieOpts);
+  res.clearCookie("accessToken", opts);
+  res.clearCookie("refreshToken", opts);
+  res.status(204).end();
+});
+
+/* ─────────── Delete Account ─────────── */
+router.delete("/delete", requireAuth, async (req, res) => {
+  const userId = req.user.id;
+
+  // 1) Remove all refresh tokens for this user
+  await prisma.refreshToken.deleteMany({ where: { userId } });
+
+  // 2) Delete the user record
+  await prisma.user.delete({ where: { id: userId } });
+
+  // 3) Clear auth cookies
+  const opts = {
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "none",
+    path: "/",
+  };
+  res.clearCookie("accessToken", opts);
+  res.clearCookie("refreshToken", opts);
+
+  // 4) Done
   res.status(204).end();
 });
 
