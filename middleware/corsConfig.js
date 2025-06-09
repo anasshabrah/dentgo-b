@@ -2,14 +2,14 @@
 import cors from 'cors';
 
 // Load your expected front-end origin from env (e.g. VITE_SERVER_URL’s host)
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://app.dentgo.io';
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://dentgo.io';
 
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
   'https://dentgo.io',
   'http://localhost:3000',
-  'http://localhost:5173',      // Vite default
-  'https://dentgo-b.onrender.com' // staging
+  'http://localhost:5173',
+  'https://api.dentgo.io'
 ];
 
 // Allow any subdomain of vercel.app that starts with "dentgo"
