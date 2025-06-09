@@ -12,6 +12,7 @@ import requireAuth from './middleware/requireAuth.js';
 
 // sanity‐check critical env
 [
+  'FRONTEND_ORIGIN',
   'JWT_SECRET',
   'GOOGLE_CLIENT_ID',
   'GOOGLE_CLIENT_SECRET',
