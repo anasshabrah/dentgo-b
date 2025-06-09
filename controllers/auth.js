@@ -39,15 +39,44 @@ async function issueRefresh(user) {
   return raw;
 }
 
+/* ─────────────── Cookie Helpers ─────────────── */
 function setAuthCookies(res, access, refresh) {
-  const opts = {
+  const baseOpts = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "none",
     path: "/",
   };
-  res.cookie("accessToken", access, { ...opts, maxAge: ACCESS_TTL * 1000 });
-  res.cookie("refreshToken", refresh, { ...opts, maxAge: REFRESH_TTL * 1000 });
+
+  // In prod, either omit domain (defaults to host) or explicitly set your domain:
+  const domainOpts =
+    process.env.NODE_ENV === "production"
+      ? { domain: ".dentgo.io" }
+      : {};
+
+  res.cookie("accessToken", access, {
+    ...baseOpts,
+    ...domainOpts,
+    maxAge: ACCESS_TTL * 1000,
+  });
+  res.cookie("refreshToken", refresh, {
+    ...baseOpts,
+    ...domainOpts,
+    maxAge: REFRESH_TTL * 1000,
+  });
+}
+
+function clearAuthCookies(res) {
+  const clearOpts = {
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "none",
+    path: "/",
+  };
+  if (process.env.NODE_ENV === "production") {
+    clearOpts.domain = ".dentgo.io";
+  }
+  res.clearCookie("accessToken", clearOpts);
+  res.clearCookie("refreshToken", clearOpts);
 }
 
 /* ─────────── Google OAuth (Traditional) ─────────── */
@@ -72,7 +101,9 @@ passport.use(
         });
 
         await prisma.oAuthAccount.upsert({
-          where: { provider_providerUserId: { provider: "google", providerUserId } },
+          where: {
+            provider_providerUserId: { provider: "google", providerUserId },
+          },
           update: {},
           create: { provider: "google", providerUserId, userId: user.id },
         });
@@ -119,7 +150,9 @@ router.post("/google", async (req, res) => {
     });
 
     await prisma.oAuthAccount.upsert({
-      where: { provider_providerUserId: { provider: "google", providerUserId } },
+      where: {
+        provider_providerUserId: { provider: "google", providerUserId },
+      },
       update: {},
       create: { provider: "google", providerUserId, userId: user.id },
     });
@@ -152,7 +185,9 @@ passport.use(
       done(null, {
         providerUserId: profile.id,
         email: profile.email,
-        name: `${profile.name?.givenName || ""} ${profile.name?.familyName || ""}`.trim(),
+        name: `${profile.name?.givenName || ""} ${
+          profile.name?.familyName || ""
+        }`.trim(),
       });
     }
   )
@@ -172,7 +207,9 @@ router.post(
       });
 
       await prisma.oAuthAccount.upsert({
-        where: { provider_providerUserId: { provider: "apple", providerUserId } },
+        where: {
+          provider_providerUserId: { provider: "apple", providerUserId },
+        },
         update: {},
         create: { provider: "apple", providerUserId, userId: user.id },
       });
@@ -216,17 +253,8 @@ router.post("/refresh", async (req, res) => {
 
 /* ─────────── Logout ─────────── */
 router.post("/logout", requireAuth, async (req, res) => {
-  // delete all this user’s refresh tokens
   await prisma.refreshToken.deleteMany({ where: { userId: req.user.id } });
-
-  // clear cookies
-  const opts = {
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "none",
-    path: "/",
-  };
-  res.clearCookie("accessToken", opts);
-  res.clearCookie("refreshToken", opts);
+  clearAuthCookies(res);
   res.status(204).end();
 });
 
@@ -235,28 +263,14 @@ router.delete("/delete", requireAuth, async (req, res) => {
   const userId = req.user.id;
 
   try {
-    // 1) Remove all refresh tokens for this user
     await prisma.refreshToken.deleteMany({ where: { userId } });
-
-    // 2) Remove dependent records to satisfy foreign key constraints
     await prisma.chatSession.deleteMany({ where: { userId } });
     await prisma.card.deleteMany({ where: { userId } });
     await prisma.notification.deleteMany({ where: { userId } });
     await prisma.subscription.deleteMany({ where: { userId } });
-
-    // 3) Delete the user record
     await prisma.user.delete({ where: { id: userId } });
 
-    // 4) Clear auth cookies
-    const opts = {
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "none",
-      path: "/",
-    };
-    res.clearCookie("accessToken", opts);
-    res.clearCookie("refreshToken", opts);
-
-    // 5) Done
+    clearAuthCookies(res);
     res.status(204).end();
   } catch (err) {
     console.error("Delete account error:", err);
