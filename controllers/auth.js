@@ -15,10 +15,9 @@ const requireAuth = require("../middleware/requireAuth");
 
 const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;
 const REFRESH_TTL = +process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60;
-
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-/* ─────────────── JWT Helpers ─────────────── */
+// ─────────────── Helpers ───────────────
 function signAccess(user) {
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role },
@@ -41,28 +40,17 @@ async function issueRefresh(user) {
 }
 
 function setAuthCookies(res, access, refresh) {
-  // If we're in production, require secure cookies (HTTPS). Locally, we allow secure:false.
-  const cookieOptions = {
+  const opts = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "none", // allow cross-site in production
-    path: "/", // send on all requests
+    sameSite: "none",
+    path: "/",
   };
-
-  // 1) Set accessToken cookie at root
-  res.cookie("accessToken", access, {
-    ...cookieOptions,
-    maxAge: ACCESS_TTL * 1000,
-  });
-
-  // 2) Set refreshToken cookie at root
-  res.cookie("refreshToken", refresh, {
-    ...cookieOptions,
-    maxAge: REFRESH_TTL * 1000,
-  });
+  res.cookie("accessToken", access, { ...opts, maxAge: ACCESS_TTL * 1000 });
+  res.cookie("refreshToken", refresh, { ...opts, maxAge: REFRESH_TTL * 1000 });
 }
 
-/* ─────────────── Google OAuth (Traditional) ─────────────── */
+// ─────────────── Google OAuth (traditional) ───────────────
 passport.use(
   new GoogleStrategy(
     {
@@ -70,26 +58,32 @@ passport.use(
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       callbackURL: "/api/auth/google/callback",
     },
-    async (accessToken, refreshToken, profile, done) => {
+    async (_, __, profile, done) => {
       try {
         const email = profile.emails?.[0]?.value;
         const name = profile.displayName;
-        const picture = profile.photos?.[0]?.value;
+        const pic = profile.photos?.[0]?.value;
         const providerUserId = profile.id;
 
         const user = await prisma.user.upsert({
           where: { email },
-          update: { name, picture },
-          create: { name, email, picture },
+          update: { name, picture: pic },
+          create: { name, email, picture: pic },
         });
 
         await prisma.oAuthAccount.upsert({
-          where: { provider_providerUserId: { provider: "google", providerUserId } },
+          where: {
+            provider_providerUserId: { provider: "google", providerUserId },
+          },
           update: {},
-          create: { provider: "google", providerUserId, userId: user.id },
+          create: {
+            provider: "google",
+            providerUserId,
+            userId: user.id,
+          },
         });
 
-        return done(null, user);
+        done(null, user);
       } catch (err) {
         console.error("GoogleStrategy error:", err);
         done(err, null);
@@ -99,7 +93,6 @@ passport.use(
 );
 
 router.get("/google", passport.authenticate("google", { scope: ["profile", "email"] }));
-
 router.get(
   "/google/callback",
   passport.authenticate("google", { session: false, failureRedirect: "/LetsYouIn" }),
@@ -108,11 +101,11 @@ router.get(
     const access = signAccess(user);
     const refresh = await issueRefresh(user);
     setAuthCookies(res, access, refresh);
-    res.redirect(`${process.env.FRONTEND_ORIGIN || "https://dentgo-f.vercel.app"}`);
+    res.redirect(process.env.FRONTEND_ORIGIN || "https://dentgo-f.vercel.app");
   }
 );
 
-/* ─────────────── Google One Tap login (One Tap) ─────────────── */
+// ─────────────── Google One-Tap ───────────────
 router.post("/google", async (req, res) => {
   const { credential } = req.body;
   if (!credential) return res.status(400).json({ error: "Missing credential" });
@@ -122,7 +115,6 @@ router.post("/google", async (req, res) => {
       idToken: credential,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
-
     const { sub: providerUserId, name, email, picture } = ticket.getPayload();
 
     const user = await prisma.user.upsert({
@@ -132,9 +124,15 @@ router.post("/google", async (req, res) => {
     });
 
     await prisma.oAuthAccount.upsert({
-      where: { provider_providerUserId: { provider: "google", providerUserId } },
+      where: {
+        provider_providerUserId: { provider: "google", providerUserId },
+      },
       update: {},
-      create: { provider: "google", providerUserId, userId: user.id },
+      create: {
+        provider: "google",
+        providerUserId,
+        userId: user.id,
+      },
     });
 
     const access = signAccess(user);
@@ -147,9 +145,9 @@ router.post("/google", async (req, res) => {
   }
 });
 
-/* ─────────────── Apple OAuth (existing) ─────────────── */
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((obj, done) => done(null, obj));
+// ─────────────── Apple OAuth ───────────────
+passport.serializeUser((u, done) => done(null, u));
+passport.deserializeUser((o, done) => done(null, o));
 
 passport.use(
   new AppleStrategy(
@@ -158,22 +156,22 @@ passport.use(
       teamID: process.env.APPLE_TEAM_ID,
       keyID: process.env.APPLE_KEY_ID,
       privateKey: process.env.APPLE_PRIVATE_KEY,
-      // NOW points at the backend’s callback, not FRONTEND_ORIGIN
       callbackURL: process.env.APPLE_CALLBACK_URL,
       scope: ["name", "email"],
     },
-    (accessToken, refreshToken, idToken, profile, done) => {
+    (_, __, ___, profile, done) => {
       done(null, {
         providerUserId: profile.id,
         email: profile.email,
-        name: `${profile.name?.givenName || ""} ${profile.name?.familyName || ""}`.trim(),
+        name: `${profile.name?.givenName || ""} ${
+          profile.name?.familyName || ""
+        }`.trim(),
       });
     }
   )
 );
 
 router.get("/apple", passport.authenticate("apple"));
-
 router.post(
   "/apple/callback",
   passport.authenticate("apple", { session: false, failureRedirect: "/LetsYouIn" }),
@@ -188,15 +186,20 @@ router.post(
       });
 
       await prisma.oAuthAccount.upsert({
-        where: { provider_providerUserId: { provider: "apple", providerUserId } },
+        where: {
+          provider_providerUserId: { provider: "apple", providerUserId },
+        },
         update: {},
-        create: { provider: "apple", providerUserId, userId: user.id },
+        create: {
+          provider: "apple",
+          providerUserId,
+          userId: user.id,
+        },
       });
 
       const access = signAccess(user);
       const refresh = await issueRefresh(user);
       setAuthCookies(res, access, refresh);
-      // Return JSON instead of redirect (One‐tap flow expects JSON)
       res.json({ user });
     } catch (err) {
       console.error("Apple login error:", err);
@@ -205,66 +208,39 @@ router.post(
   }
 );
 
-/* ─────────────── Refresh and Logout ─────────────── */
+// ─────────────── Refresh ───────────────
 router.post("/refresh", async (req, res) => {
-  const { refreshToken } = req.cookies;
-  if (!refreshToken) return res.status(401).json({ error: "No refresh token" });
+  const token = req.cookies.refreshToken;
+  if (!token) return res.status(401).json({ error: "No refresh token" });
 
-  // Find all unexpired refresh tokens (for performance, you could add a cron job to delete expired tokens regularly)
-  const tokens = await prisma.refreshToken.findMany({
+  const records = await prisma.refreshToken.findMany({
     where: { expiresAt: { gt: new Date() } },
     include: { user: true },
   });
 
-  let stored = null;
-  for (const t of tokens) {
-    if (await bcrypt.compare(refreshToken, t.tokenHash)) {
-      stored = t;
-      break;
-    }
-  }
-  if (!stored) return res.status(401).json({ error: "Invalid refresh token" });
+  const match = records.find((r) => bcrypt.compareSync(token, r.tokenHash));
+  if (!match) return res.status(401).json({ error: "Invalid refresh token" });
 
-  // Delete old token & issue a new one
-  await prisma.refreshToken.delete({ where: { id: stored.id } });
-  const newRefresh = await issueRefresh(stored.user);
-  const newAccess = signAccess(stored.user);
+  await prisma.refreshToken.delete({ where: { id: match.id } });
+  const newRefresh = await issueRefresh(match.user);
+  const newAccess = signAccess(match.user);
   setAuthCookies(res, newAccess, newRefresh);
-  res.json({ user: stored.user });
+  res.json({ user: match.user });
 });
 
+// ─────────── Optimized Logout ───────────
 router.post("/logout", requireAuth, async (req, res) => {
-  const { refreshToken } = req.cookies;
-  if (refreshToken) {
-    // ONLY fetch this user’s tokens (much smaller set)
-    const tokens = await prisma.refreshToken.findMany({
-      where: { userId: req.user.id },
-    });
+  // delete all this user’s refresh tokens in one go
+  await prisma.refreshToken.deleteMany({ where: { userId: req.user.id } });
 
-    await Promise.all(
-      tokens.map((t) =>
-        bcrypt
-          .compare(refreshToken, t.tokenHash)
-          .then((match) =>
-            match
-              ? prisma.refreshToken.delete({ where: { id: t.id } })
-              : null
-          )
-      )
-    );
-  }
-
-  // Clear both cookies (root path)
-  res.clearCookie("accessToken", {
+  // clear cookies at root
+  const cookieOpts = {
     secure: process.env.NODE_ENV === "production",
     sameSite: "none",
     path: "/",
-  });
-  res.clearCookie("refreshToken", {
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "none",
-    path: "/",
-  });
+  };
+  res.clearCookie("accessToken", cookieOpts);
+  res.clearCookie("refreshToken", cookieOpts);
   res.status(204).end();
 });
 

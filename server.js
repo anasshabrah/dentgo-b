@@ -22,133 +22,91 @@ const requireAuth = require("./middleware/requireAuth");
 
 const app = express();
 
-/* ────────────────────────────────────────────────────────────────── */
-/* 0) Trust proxy (for secure cookies behind SSL proxies)             */
-/* ────────────────────────────────────────────────────────────────── */
+// 0) Trust proxy (for secure cookies behind SSL proxies)
 app.set("trust proxy", 1);
 
-/* ────────────────────────────────────────────────────────────────── */
-/* 1) Load & validate essential environment variables                 */
-/* ────────────────────────────────────────────────────────────────── */
+// 1) Validate essential env vars
 const PORT = process.env.PORT || 4000;
-
-// FRONTEND_ORIGIN must be set in production (e.g. "https://dentgo-f.vercel.app")
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
 if (!FRONTEND_ORIGIN) {
   console.error("❌  Missing FRONTEND_ORIGIN in environment");
   process.exit(1);
 }
 
-// We also allow "https://dentgo.io" (if you host a second domain), plus any preview under dentgo-*.vercel.app
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
+  "https://dentgo.io",
   "http://localhost:3000",
 ];
 const VERCEL_REGEX = /^https:\/\/dentgo.*\.vercel\.app$/;
 
-/* ────────────────────────────────────────────────────────────────── */
-/* 2) Generic middleware                                              */
-/* ────────────────────────────────────────────────────────────────── */
+// 2) Logging & CORS
 app.use(morgan("dev"));
-
-// Simple logger to show incoming Origin & Cookies
 app.use((req, res, next) => {
   console.log(`Incoming Origin: ${req.headers.origin}`);
-  console.log(`Incoming Cookies:`, req.headers.cookie);
+  console.log(`Cookies:`, req.headers.cookie);
   next();
 });
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.includes(origin) || VERCEL_REGEX.test(origin)) {
+      return cb(null, true);
+    }
+    cb(new Error(`CORS: origin "${origin}" not allowed`));
+  },
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
+  exposedHeaders: ["Set-Cookie"],
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+  optionsSuccessStatus: 204,
+  maxAge: 86400,
+}));
 
-// CORS configuration
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, Postman)
-      if (!origin) return callback(null, true);
-
-      if (ALLOWED_ORIGINS.includes(origin) || VERCEL_REGEX.test(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error(`CORS: origin "${origin}" not allowed`));
-    },
-    credentials: true,                    // Allow cookies to be sent and received
-    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"], // Add any custom headers you use
-    exposedHeaders: ["Set-Cookie"],       // Optional: allows frontend to read Set-Cookie if needed
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    optionsSuccessStatus: 204,            // For legacy browsers that choke on 200
-    maxAge: 86400                         // Cache preflight requests for 24 hours
-  })
-);
-
-// Parse incoming cookies
+// 3) Cookies & JSON
 app.use(cookieParser());
-
-/* ────────────────────────────────────────────────────────────────── */
-/* 3) Stripe Webhook – raw body for signature verification            */
-/* ────────────────────────────────────────────────────────────────── */
-app.post(
-  "/api/payments/webhook",
-  express.raw({ type: "application/json" }),
-  webhookHandler
-);
-
-/* ────────────────────────────────────────────────────────────────── */
-/* 4) JSON parsing (all other routes)                                */
-/* ────────────────────────────────────────────────────────────────── */
 app.use(express.json());
 
-/* ────────────────────────────────────────────────────────────────── */
-/* 5) Passport (Apple / Google OAuth)                                 */
-/* ────────────────────────────────────────────────────────────────── */
+// 4) Stripe webhook (raw body)
+app.post("/api/payments/webhook", express.raw({ type: "application/json" }), webhookHandler);
+
+// 5) Passport
 app.use(passport.initialize());
 
-/* ────────────────────────────────────────────────────────────────── */
-/* 6) Public auth routes                                              */
-/* ────────────────────────────────────────────────────────────────── */
+// 6) Public auth routes
 app.use("/api/auth", authRoute);
 
-/* ────────────────────────────────────────────────────────────────── */
-/* 7) Protected payments (all except webhook)                         */
-/* ────────────────────────────────────────────────────────────────── */
+// 7) Protected payments
 app.use("/api/payments", requireAuth, paymentsRouter);
 
-/* ────────────────────────────────────────────────────────────────── */
-/* 8) Other protected routes                                          */
-/* ────────────────────────────────────────────────────────────────── */
+// 8) Other protected
 app.use("/api/users", requireAuth, usersRoute);
 app.use("/api/cards", requireAuth, cardsRoute);
 app.use("/api/notifications", requireAuth, notificationsRoute);
 app.use("/api/subscriptions", requireAuth, subscriptionsRoute);
 
 const chatLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
+  windowMs: 60_000,
   max: 20,
   message: { error: "Too many requests – please slow down." },
 });
 app.use("/api/chat", requireAuth, chatLimiter, aiChatRoute);
 app.use("/api/chats", requireAuth, sessionsRoute);
 
-/* ────────────────────────────────────────────────────────────────── */
-/* 9) Health‐check / root                                             */
-/* ────────────────────────────────────────────────────────────────── */
+// 9) Health‐check / root
 app.get("/api/ping", (_req, res) => res.json({ ok: true }));
-app.get("/", (_req, res) => {
-  res.send("🚀 DentGo Backend is live!");
-});
+app.get("/", (_req, res) => res.send("🚀 DentGo Backend is live!"));
 
-/* ────────────────────────────────────────────────────────────────── */
-/* 10) Global error handler                                           */
-/* ────────────────────────────────────────────────────────────────── */
+// 10) Global error handler
 app.use((err, _req, res, _next) => {
   console.error("Unhandled error:", err);
-  if (err.message && err.message.startsWith("CORS:")) {
+  if (err.message?.startsWith("CORS:")) {
     return res.status(403).json({ error: err.message });
   }
   res.status(500).json({ error: "Internal Server Error" });
 });
 
-/* ────────────────────────────────────────────────────────────────── */
-/* 11) Start server                                                   */
-/* ────────────────────────────────────────────────────────────────── */
+// 11) Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
