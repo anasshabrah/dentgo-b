@@ -1,18 +1,20 @@
-const express = require('express');
-const router  = express.Router();
-const prisma  = require('../lib/prismaClient');
+// File: controllers/notifications.js
+import express from 'express';
+import prisma from '../lib/prismaClient.js';
 
-/* GET /api/notifications – list user notifications */
+const router = express.Router();
+
+/* GET /api/notifications */
 router.get('/', async (req, res) => {
   const userId = req.user.id;
-  const notes  = await prisma.notification.findMany({
-    where   : { userId },
-    orderBy : { createdAt: 'desc' },
+  const notes = await prisma.notification.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
   });
   res.json(notes);
 });
 
-/* POST /api/notifications/:id/seen – mark as seen (ownership enforced) */
+/* POST /api/notifications/:id/seen */
 router.post('/:id/seen', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid notification ID' });
@@ -23,10 +25,10 @@ router.post('/:id/seen', async (req, res) => {
   }
 
   const updated = await prisma.notification.update({
-    where : { id },
-    data  : { seen: true },
+    where: { id },
+    data: { seen: true },
   });
   res.json(updated);
 });
 
-module.exports = router;
+export default router;

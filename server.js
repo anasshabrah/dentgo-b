@@ -1,121 +1,105 @@
-// backend/server.js
-require("dotenv").config();
+// server.js
+import 'dotenv/config';
+import './lib/passport.js';
+import express from 'express';
+import morgan from 'morgan';
+import cookieParser from 'cookie-parser';
+import passport from 'passport';
+import rateLimit from 'express-rate-limit';
 
-const express = require("express");
-const cors = require("cors");
-const morgan = require("morgan");
-const cookieParser = require("cookie-parser");
-const passport = require("passport");
-const rateLimit = require("express-rate-limit");
+import { corsConfig } from './middleware/corsConfig.js';
+import requireAuth from './middleware/requireAuth.js';
 
-// Import your route handlers
-const authRoute = require("./controllers/auth");
-const usersRoute = require("./controllers/users");
-const cardsRoute = require("./controllers/cards");
-const notificationsRoute = require("./controllers/notifications");
-const subscriptionsRoute = require("./controllers/subscriptions");
-const aiChatRoute = require("./controllers/chat");
-const sessionsRoute = require("./controllers/chats");
-const { webhookHandler, paymentsRouter } = require("./controllers/payments");
+// sanity‐check critical env
+[
+  'JWT_SECRET',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'APPLE_CLIENT_ID',
+  'APPLE_TEAM_ID',
+  'APPLE_KEY_ID',
+  'APPLE_PRIVATE_KEY',
+  'STRIPE_SECRET_KEY',
+  'STRIPE_WEBHOOK_SECRET',
+  'ACCESS_TOKEN_TTL_MIN',
+  'REFRESH_TOKEN_TTL_DAYS',
+  'OPENAI_API_KEY'
+].forEach((k) => {
+  if (!process.env[k]) {
+    console.error(`❌ Missing env var ${k}`);
+    process.exit(1);
+  }
+});
 
-const requireAuth = require("./middleware/requireAuth");
+import authRoute from './controllers/auth.js';
+import usersRoute from './controllers/users.js';
+import cardsRoute from './controllers/cards.js';
+import notificationsRoute from './controllers/notifications.js';
+import subscriptionsRoute from './controllers/subscriptions.js';
+import aiChatRoute from './controllers/chat.js';
+import sessionsRoute from './controllers/chats.js';
+import { webhookHandler, paymentsRouter } from './controllers/payments.js';
 
 const app = express();
+app.set('trust proxy', 1);
 
-// 0) Trust proxy (for secure cookies behind SSL proxies)
-app.set("trust proxy", 1);
+// 1) Logging
+app.use(morgan('dev'));
 
-// 1) Validate essential env vars
-const PORT = process.env.PORT || 4000;
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
-if (!FRONTEND_ORIGIN) {
-  console.error("❌  Missing FRONTEND_ORIGIN in environment");
-  process.exit(1);
-}
-
-const ALLOWED_ORIGINS = [
-  FRONTEND_ORIGIN,
-  "https://dentgo.io",
-  "http://localhost:3000",
-];
-const VERCEL_REGEX = /^https:\/\/dentgo.*\.vercel\.app$/;
-
-// 2) Logging & CORS
-app.use(morgan("dev"));
-app.use((req, res, next) => {
-  console.log(`Incoming Origin: ${req.headers.origin}`);
-  console.log(`Cookies:`, req.headers.cookie);
-  next();
-});
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      // allow requests with no origin (e.g. mobile apps, curl)
-      if (!origin) return cb(null, true);
-      if (ALLOWED_ORIGINS.includes(origin) || VERCEL_REGEX.test(origin)) {
-        return cb(null, true);
-      }
-      cb(new Error(`CORS: origin "${origin}" not allowed`));
-    },
-    credentials: true,                // <-- allow cookies to be sent
-    methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
-    exposedHeaders: ["Set-Cookie"],
-    optionsSuccessStatus: 204,
-    maxAge: 86400,
-  })
-);
-
-// 3) Cookies & JSON
+// 2) Cookies before CORS!
 app.use(cookieParser());
-app.use(express.json());
 
-// 4) Stripe webhook (raw body)
+// 3) CORS (with credentials)
+app.use(corsConfig);
+
+// 4) Stripe Webhook (raw) BEFORE express.json()
 app.post(
-  "/api/payments/webhook",
-  express.raw({ type: "application/json" }),
+  '/api/payments/webhook',
+  express.raw({ type: 'application/json' }),
   webhookHandler
 );
 
-// 5) Passport
+// 5) JSON body for everything else
+app.use(express.json());
+
+// 6) Passport init
 app.use(passport.initialize());
 
-// 6) Public auth routes
-app.use("/api/auth", authRoute);
+// 7) Public auth
+app.use('/api/auth', authRoute);
 
-// 7) Protected payments
-app.use("/api/payments", requireAuth, paymentsRouter);
+// 8) Protected payments
+app.use('/api/payments', requireAuth, paymentsRouter);
 
-// 8) Other protected
-app.use("/api/users", requireAuth, usersRoute);
-app.use("/api/cards", requireAuth, cardsRoute);
-app.use("/api/notifications", requireAuth, notificationsRoute);
-app.use("/api/subscriptions", requireAuth, subscriptionsRoute);
+// 9) Other protected
+app.use('/api/users', requireAuth, usersRoute);
+app.use('/api/cards', requireAuth, cardsRoute);
+app.use('/api/notifications', requireAuth, notificationsRoute);
+app.use('/api/subscriptions', requireAuth, subscriptionsRoute);
 
 const chatLimiter = rateLimit({
   windowMs: 60_000,
   max: 20,
-  message: { error: "Too many requests – please slow down." },
+  message: { error: 'Too many requests – please slow down.' },
 });
-app.use("/api/chat", requireAuth, chatLimiter, aiChatRoute);
-app.use("/api/chats", requireAuth, sessionsRoute);
+app.use('/api/chat', requireAuth, chatLimiter, aiChatRoute);
+app.use('/api/chats', requireAuth, sessionsRoute);
 
-// 9) Health‐check / root
-app.get("/api/ping", (_req, res) => res.json({ ok: true }));
-app.get("/", (_req, res) =>
-  res.send("🚀 DentGo Backend is live!")
-);
+// 10) Health-check
+app.get('/api/ping', (_q, r) => r.json({ ok: true }));
+app.get('/', (_q, r) => r.send('🚀 DentGo Backend is live!'));
 
-// 10) Global error handler
-app.use((err, _req, res, _next) => {
-  console.error("Unhandled error:", err);
-  if (err.message?.startsWith("CORS:")) {
+// 11) Global error handler
+app.use((err, _req, res, next) => {
+  console.error('Unhandled error:', err);
+  if (err.message?.startsWith('CORS:')) {
     return res.status(403).json({ error: err.message });
   }
-  res.status(500).json({ error: "Internal Server Error" });
+  // delegate to any remaining error handlers (or default Express one)
+  return next(err);
 });
 
-// 11) Start server
+const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });

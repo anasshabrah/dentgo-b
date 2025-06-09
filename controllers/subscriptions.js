@@ -1,20 +1,25 @@
-const express = require('express');
-const router  = express.Router();
-const prisma  = require('../lib/prismaClient');
+// File: controllers/subscriptions.js
+import express from 'express';
+import prisma from '../lib/prismaClient.js';
 
-/* GET /api/subscriptions – list user subscriptions */
-router.get('/', async (req, res) => {
-  const userId = req.user.id;
-  const subs   = await prisma.subscription.findMany({ where: { userId } });
-  res.json(subs);
-});
+const router = express.Router();
 
-/* Utility to fetch & assert ownership */
 async function findSub(id, userId) {
   const sub = await prisma.subscription.findUnique({ where: { id } });
   if (!sub || sub.userId !== userId) return null;
   return sub;
 }
+
+/* GET /api/subscriptions */
+router.get('/', async (req, res) => {
+  try {
+    const subs = await prisma.subscription.findMany({ where: { userId: req.user.id } });
+    res.json(subs);
+  } catch (err) {
+    console.error('GET /api/subscriptions error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 /* GET /api/subscriptions/:id */
 router.get('/:id', async (req, res) => {
@@ -24,28 +29,37 @@ router.get('/:id', async (req, res) => {
   res.json(sub);
 });
 
-/* POST /api/subscriptions – create */
+/* POST /api/subscriptions */
 router.post('/', async (req, res) => {
-  const userId = req.user.id;
   const { plan, status, beganAt, renewsAt, cancelsAt } = req.body;
-  const sub = await prisma.subscription.create({
-    data: { plan, status, beganAt, renewsAt, cancelsAt, userId },
-  });
-  res.status(201).json(sub);
+  try {
+    const sub = await prisma.subscription.create({
+      data: { plan, status, beganAt, renewsAt, cancelsAt, userId: req.user.id },
+    });
+    res.status(201).json(sub);
+  } catch (err) {
+    console.error('POST /api/subscriptions error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-/* PUT /api/subscriptions/:id – update */
+/* PUT /api/subscriptions/:id */
 router.put('/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const sub = await findSub(id, req.user.id);
   if (!sub) return res.status(404).json({ error: 'Subscription not found' });
 
   const { status, renewsAt, cancelsAt } = req.body;
-  const updated = await prisma.subscription.update({
-    where: { id },
-    data : { status, renewsAt, cancelsAt },
-  });
-  res.json(updated);
+  try {
+    const updated = await prisma.subscription.update({
+      where: { id },
+      data: { status, renewsAt, cancelsAt },
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error('PUT /api/subscriptions/:id error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 /* DELETE /api/subscriptions/:id */
@@ -54,8 +68,13 @@ router.delete('/:id', async (req, res) => {
   const sub = await findSub(id, req.user.id);
   if (!sub) return res.status(404).json({ error: 'Subscription not found' });
 
-  await prisma.subscription.delete({ where: { id } });
-  res.status(204).end();
+  try {
+    await prisma.subscription.delete({ where: { id } });
+    res.status(204).end();
+  } catch (err) {
+    console.error('DELETE /api/subscriptions/:id error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-module.exports = router;
+export default router;

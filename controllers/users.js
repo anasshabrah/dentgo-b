@@ -1,9 +1,9 @@
-// cb/routes/users.js
-const express = require('express');
-const router = express.Router();
-const prisma = require('../lib/prismaClient');
+// File: controllers/users.js
+import express from 'express';
+import prisma from '../lib/prismaClient.js';
 
-// Utility: Validate user input (basic)
+const router = express.Router();
+
 function validateUserInput({ name, email, role }) {
   if (!name || typeof name !== 'string') return 'Invalid or missing "name"';
   if (!email || typeof email !== 'string') return 'Invalid or missing "email"';
@@ -11,12 +11,12 @@ function validateUserInput({ name, email, role }) {
   return null;
 }
 
-// GET /api/users/me – Return the authenticated user
+// GET /api/users/me
 router.get('/me', (req, res) => {
   res.json({ user: req.user });
 });
 
-// GET /api/users – List all users
+// GET /api/users
 router.get('/', async (req, res) => {
   try {
     const users = await prisma.user.findMany({
@@ -29,7 +29,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/users/:id – Get a single user by ID
+// GET /api/users/:id
 router.get('/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid user ID' });
@@ -37,11 +37,7 @@ router.get('/:id', async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id },
-      include: {
-        subscriptions: true,
-        chats: true,
-        notifications: true,
-      },
+      include: { subscriptions: true, chats: true, notifications: true }
     });
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(user);
@@ -51,7 +47,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// POST /api/users – Create a new user
+// POST /api/users
 router.post('/', async (req, res) => {
   const { name, email, picture, role } = req.body;
   const validationError = validateUserInput({ name, email, role });
@@ -62,7 +58,7 @@ router.post('/', async (req, res) => {
     if (existing) return res.status(409).json({ error: 'Email already in use' });
 
     const user = await prisma.user.create({
-      data: { name, email, picture, role: role || 'USER' },
+      data: { name, email, picture, role: role || 'USER' }
     });
     res.status(201).json(user);
   } catch (err) {
@@ -71,7 +67,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT /api/users/:id – Update user
+// PUT /api/users/:id
 router.put('/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid user ID' });
@@ -83,7 +79,7 @@ router.put('/:id', async (req, res) => {
   try {
     const user = await prisma.user.update({
       where: { id },
-      data: { name, email, picture, role },
+      data: { name, email, picture, role }
     });
     res.json(user);
   } catch (err) {
@@ -93,7 +89,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/users/:id – Delete user
+// DELETE /api/users/:id
 router.delete('/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid user ID' });
@@ -108,4 +104,4 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;
