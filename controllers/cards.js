@@ -83,6 +83,7 @@ router.post('/', async (req, res) => {
 
     const newCard = await prisma.card.create({
       data: {
+        paymentMethodId, // 🔧 Save it in the database
         type,
         network,
         last4,

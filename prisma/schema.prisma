@@ -65,6 +65,7 @@ model Card {
   userId      Int
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
+  paymentMethodId  String
   user        User        @relation(fields: [userId], references: [id])
 }
 
