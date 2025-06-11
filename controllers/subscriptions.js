@@ -1,4 +1,4 @@
-// File: controllers/subscriptions.js
+// controllers/subscriptions.js
 import express from 'express';
 import prisma from '../lib/prismaClient.js';
 
@@ -13,8 +13,22 @@ async function findSub(id, userId) {
 /* GET /api/subscriptions */
 router.get('/', async (req, res) => {
   try {
-    const subs = await prisma.subscription.findMany({ where: { userId: req.user.id } });
-    res.json(subs);
+    // Return the user's active subscription (or null)
+    const sub = await prisma.subscription.findFirst({
+      where: { userId: req.user.id, status: 'ACTIVE' },
+    });
+
+    if (!sub) {
+      return res.json(null);
+    }
+
+    res.json({
+      subscriptionId: sub.stripeSubscriptionId,
+      status: sub.status.toLowerCase(),           // e.g. 'active'
+      currentPeriodEnd: sub.renewsAt
+        ? Math.floor(sub.renewsAt.getTime() / 1000)
+        : null,
+    });
   } catch (err) {
     console.error('GET /api/subscriptions error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -24,8 +38,15 @@ router.get('/', async (req, res) => {
 /* GET /api/subscriptions/:id */
 router.get('/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    return res.status(400).json({ error: 'Invalid subscription ID' });
+  }
+
   const sub = await findSub(id, req.user.id);
-  if (!sub) return res.status(404).json({ error: 'Subscription not found' });
+  if (!sub) {
+    return res.status(404).json({ error: 'Subscription not found' });
+  }
+
   res.json(sub);
 });
 
@@ -46,8 +67,14 @@ router.post('/', async (req, res) => {
 /* PUT /api/subscriptions/:id */
 router.put('/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const sub = await findSub(id, req.user.id);
-  if (!sub) return res.status(404).json({ error: 'Subscription not found' });
+  if (isNaN(id)) {
+    return res.status(400).json({ error: 'Invalid subscription ID' });
+  }
+
+  const existing = await findSub(id, req.user.id);
+  if (!existing) {
+    return res.status(404).json({ error: 'Subscription not found' });
+  }
 
   const { status, renewsAt, cancelsAt } = req.body;
   try {
@@ -65,8 +92,14 @@ router.put('/:id', async (req, res) => {
 /* DELETE /api/subscriptions/:id */
 router.delete('/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const sub = await findSub(id, req.user.id);
-  if (!sub) return res.status(404).json({ error: 'Subscription not found' });
+  if (isNaN(id)) {
+    return res.status(400).json({ error: 'Invalid subscription ID' });
+  }
+
+  const existing = await findSub(id, req.user.id);
+  if (!existing) {
+    return res.status(404).json({ error: 'Subscription not found' });
+  }
 
   try {
     await prisma.subscription.delete({ where: { id } });
