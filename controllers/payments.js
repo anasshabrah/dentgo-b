@@ -115,6 +115,8 @@ router.post('/create-payment-intent', requireAuth, async (req, res, next) => {
  */
 router.post('/create-subscription', requireAuth, async (req, res, next) => {
   try {
+    console.log('> create-subscription hit for user', req.user.id);
+
     const userId = req.user.id;
     const { priceId: frontendPriceId, paymentMethodId } = req.body || {};
     const priceId = frontendPriceId || process.env.STRIPE_PRICE_ID;
@@ -172,7 +174,11 @@ export async function webhookHandler(req, res) {
   let event;
 
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
   } catch (err) {
     console.error('⚠️  Webhook signature verification failed.', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);

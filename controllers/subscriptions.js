@@ -24,7 +24,7 @@ router.get('/', async (req, res) => {
 
     res.json({
       subscriptionId: sub.stripeSubscriptionId,
-      status: sub.status.toLowerCase(),           // 'active'
+      status: sub.status.toLowerCase(), // 'active'
       currentPeriodEnd: sub.renewsAt
         ? Math.floor(sub.renewsAt.getTime() / 1000)
         : null,
