@@ -1,4 +1,4 @@
-// File: controllers/subscriptions.js
+// controllers/subscriptions.js
 import express from 'express';
 import prisma from '../lib/prismaClient.js';
 

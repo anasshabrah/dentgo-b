@@ -1,4 +1,4 @@
-// File: controllers/payments.js
+// controllers/payments.js
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
@@ -119,11 +119,29 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
 
     const userId = req.user.id;
     const { priceId: frontendPriceId, paymentMethodId } = req.body || {};
-    // Determine plan: FREE if unspecified or explicitly FREE
     const priceId = frontendPriceId || 'FREE';
 
     // Free (Basic) plan: bypass Stripe
     if (priceId === 'FREE') {
+      // Check for existing active FREE plan
+      const existing = await prisma.subscription.findFirst({
+        where: {
+          userId,
+          plan: 'FREE',
+          status: 'ACTIVE',
+        },
+      });
+
+      if (existing) {
+        return res.json({
+          subscriptionId: existing.id,
+          status: existing.status.toLowerCase(),
+          currentPeriodEnd: existing.renewsAt
+            ? Math.floor(existing.renewsAt.getTime() / 1000)
+            : null,
+        });
+      }
+
       const now = new Date();
       const freeSub = await prisma.subscription.create({
         data: {
@@ -136,6 +154,7 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
           stripePriceId: null,
         },
       });
+
       return res.json({
         subscriptionId: freeSub.id,
         status: 'active',
@@ -153,7 +172,7 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Stripe customer not found for user' });
     }
 
-    // Attach payment method and update customer invoice settings
+    // Attach payment method and set default
     await stripe.paymentMethods.attach(paymentMethodId, {
       customer: user.stripeCustomerId,
     });
@@ -168,14 +187,15 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
       expand: ['latest_invoice.payment_intent'],
     });
 
-    // Save subscription record in DB
     const newSub = await prisma.subscription.create({
       data: {
         userId,
         plan: priceId.includes('plus') ? 'PLUS' : priceId.includes('pro') ? 'PRO' : 'UNKNOWN',
         status: subscription.status.toUpperCase(),
         beganAt: new Date(subscription.created * 1000),
-        renewsAt: subscription.current_period_end ? new Date(subscription.current_period_end * 1000) : null,
+        renewsAt: subscription.current_period_end
+          ? new Date(subscription.current_period_end * 1000)
+          : null,
         stripeSubscriptionId: subscription.id,
         stripePriceId: priceId,
       },
@@ -214,7 +234,9 @@ export async function webhookHandler(req, res) {
 
     const updates = {
       status: subscription.status.toUpperCase(),
-      renewsAt: subscription.current_period_end ? new Date(subscription.current_period_end * 1000) : existing.renewsAt,
+      renewsAt: subscription.current_period_end
+        ? new Date(subscription.current_period_end * 1000)
+        : existing.renewsAt,
     };
     if (subscription.cancel_at) {
       updates.cancelsAt = new Date(subscription.cancel_at * 1000);
