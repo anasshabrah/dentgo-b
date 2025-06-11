@@ -1,4 +1,4 @@
-// controllers/subscriptions.js
+// File: controllers/subscriptions.js
 import express from 'express';
 import prisma from '../lib/prismaClient.js';
 
@@ -13,7 +13,7 @@ async function findSub(id, userId) {
 /* GET /api/subscriptions */
 router.get('/', async (req, res) => {
   try {
-    // Return the user's active subscription (or null)
+    // Return only the active subscription, or null if none
     const sub = await prisma.subscription.findFirst({
       where: { userId: req.user.id, status: 'ACTIVE' },
     });
@@ -24,7 +24,7 @@ router.get('/', async (req, res) => {
 
     res.json({
       subscriptionId: sub.stripeSubscriptionId,
-      status: sub.status.toLowerCase(),           // e.g. 'active'
+      status: sub.status.toLowerCase(),           // 'active'
       currentPeriodEnd: sub.renewsAt
         ? Math.floor(sub.renewsAt.getTime() / 1000)
         : null,
