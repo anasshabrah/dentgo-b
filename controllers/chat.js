@@ -121,4 +121,31 @@ router.post('/', async (req, res) => {
   }
 });
 
+// NEW: GET /count?date=YYYY-MM-DD — returns number of messages by the user on that day
+router.get('/count', async (req, res) => {
+  try {
+    const { date } = req.query;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    if (!date) return res.status(400).json({ error: 'Missing date parameter' });
+
+    const start = new Date(`${date}T00:00:00Z`);
+    const end = new Date(`${date}T23:59:59.999Z`);
+
+    const count = await prisma.message.count({
+      where: {
+        role: 'USER',
+        createdAt: { gte: start, lte: end },
+        chat: { userId },
+      },
+    });
+
+    res.json({ date, count });
+  } catch (err) {
+    console.error('💥 /chat/count error:', err);
+    res.status(500).json({ error: 'Failed to count messages' });
+  }
+});
+
 export default router;
