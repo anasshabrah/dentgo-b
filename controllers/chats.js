@@ -1,4 +1,4 @@
-// File: controllers/chats.js
+// controllers/chats.js
 import express from 'express';
 import prisma from '../lib/prismaClient.js';
 
@@ -88,6 +88,8 @@ router.post('/:id/messages', async (req, res) => {
 // PATCH /api/chats/:id/end
 router.patch('/:id/end', async (req, res) => {
   const id = parseInt(req.params.id, 10);
+  const { title } = req.body;
+
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid session ID' });
 
   try {
@@ -98,7 +100,10 @@ router.patch('/:id/end', async (req, res) => {
 
     await prisma.chatSession.update({
       where: { id },
-      data: { endedAt: new Date() },
+      data: {
+        endedAt: new Date(),
+        ...(title ? { title } : {}),
+      },
     });
 
     res.json({ success: true });
