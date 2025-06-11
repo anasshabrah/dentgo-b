@@ -119,9 +119,33 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
 
     const userId = req.user.id;
     const { priceId: frontendPriceId, paymentMethodId } = req.body || {};
-    const priceId = frontendPriceId || process.env.STRIPE_PRICE_ID;
-    if (!priceId) {
-      return res.status(400).json({ error: 'No price ID provided' });
+    // Determine plan: FREE if unspecified or explicitly FREE
+    const priceId = frontendPriceId || 'FREE';
+
+    // Free (Basic) plan: bypass Stripe
+    if (priceId === 'FREE') {
+      const now = new Date();
+      const freeSub = await prisma.subscription.create({
+        data: {
+          userId,
+          plan: 'FREE',
+          status: 'ACTIVE',
+          beganAt: now,
+          renewsAt: null,
+          stripeSubscriptionId: null,
+          stripePriceId: null,
+        },
+      });
+      return res.json({
+        subscriptionId: freeSub.id,
+        status: 'active',
+        currentPeriodEnd: null,
+      });
+    }
+
+    // Paid plan: require paymentMethod
+    if (!paymentMethodId) {
+      return res.status(400).json({ error: 'Missing paymentMethodId' });
     }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -129,6 +153,7 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Stripe customer not found for user' });
     }
 
+    // Attach payment method and update customer invoice settings
     await stripe.paymentMethods.attach(paymentMethodId, {
       customer: user.stripeCustomerId,
     });
@@ -136,29 +161,30 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
       invoice_settings: { default_payment_method: paymentMethodId },
     });
 
+    // Create Stripe subscription
     const subscription = await stripe.subscriptions.create({
       customer: user.stripeCustomerId,
       items: [{ price: priceId }],
       expand: ['latest_invoice.payment_intent'],
     });
 
+    // Save subscription record in DB
     const newSub = await prisma.subscription.create({
       data: {
-        plan: priceId.includes('plus') ? 'PLUS' : priceId.includes('pro') ? 'PRO' : 'FREE',
+        userId,
+        plan: priceId.includes('plus') ? 'PLUS' : priceId.includes('pro') ? 'PRO' : 'UNKNOWN',
         status: subscription.status.toUpperCase(),
         beganAt: new Date(subscription.created * 1000),
-        renewsAt: subscription.current_period_end
-          ? new Date(subscription.current_period_end * 1000)
-          : null,
-        userId,
+        renewsAt: subscription.current_period_end ? new Date(subscription.current_period_end * 1000) : null,
         stripeSubscriptionId: subscription.id,
         stripePriceId: priceId,
       },
     });
 
+    const intent = subscription.latest_invoice.payment_intent;
     res.json({
-      subscriptionId: subscription.id,
-      clientSecret: subscription.latest_invoice.payment_intent.client_secret,
+      subscriptionId: newSub.stripeSubscriptionId,
+      clientSecret: intent.client_secret,
       status: subscription.status,
     });
   } catch (err) {
@@ -174,11 +200,7 @@ export async function webhookHandler(req, res) {
   let event;
 
   try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     console.error('⚠️  Webhook signature verification failed.', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -192,18 +214,13 @@ export async function webhookHandler(req, res) {
 
     const updates = {
       status: subscription.status.toUpperCase(),
-      renewsAt: subscription.current_period_end
-        ? new Date(subscription.current_period_end * 1000)
-        : existing.renewsAt,
+      renewsAt: subscription.current_period_end ? new Date(subscription.current_period_end * 1000) : existing.renewsAt,
     };
     if (subscription.cancel_at) {
       updates.cancelsAt = new Date(subscription.cancel_at * 1000);
     }
 
-    await prisma.subscription.update({
-      where: { id: existing.id },
-      data: updates,
-    });
+    await prisma.subscription.update({ where: { id: existing.id }, data: updates });
   };
 
   switch (event.type) {
