@@ -1,4 +1,4 @@
-// controllers/chats.js
+// File: controllers/chats.js
 import express from 'express';
 import prisma from '../lib/prismaClient.js';
 
@@ -11,7 +11,13 @@ router.get('/', async (req, res) => {
     const sessions = await prisma.chatSession.findMany({
       where: { userId },
       orderBy: { startedAt: 'desc' },
-      select: { id: true, title: true, startedAt: true, endedAt: true },
+      select: {
+        id: true,
+        title: true,
+        startedAt: true,
+        endedAt: true,
+        isEnded: true,
+      },
     });
     res.json(sessions);
   } catch (err) {
@@ -28,8 +34,19 @@ router.get('/:id', async (req, res) => {
   try {
     const session = await prisma.chatSession.findUnique({
       where: { id },
-      include: { messages: { orderBy: { createdAt: 'asc' } } },
+      select: {
+        id: true,
+        title: true,
+        startedAt: true,
+        endedAt: true,
+        isEnded: true,
+        messages: {
+          orderBy: { createdAt: 'asc' },
+          select: { id: true, role: true, content: true, createdAt: true },
+        },
+      },
     });
+
     if (!session || session.userId !== req.user.id) {
       return res.status(404).json({ error: 'Chat session not found' });
     }
@@ -58,33 +75,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-// POST /api/chats/:id/messages
-router.post('/:id/messages', async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const { role, content } = req.body;
-  if (isNaN(id) || !role || !content) {
-    return res.status(400).json({ error: 'Invalid session ID or message data' });
-  }
-  if (!['USER', 'BOT'].includes(role)) {
-    return res.status(400).json({ error: 'Invalid message role' });
-  }
-
-  try {
-    const session = await prisma.chatSession.findUnique({ where: { id } });
-    if (!session || session.userId !== req.user.id) {
-      return res.status(404).json({ error: 'Chat session not found' });
-    }
-
-    const message = await prisma.message.create({
-      data: { chatId: id, role, content },
-    });
-    res.status(201).json(message);
-  } catch (err) {
-    console.error('POST /api/chats/:id/messages error:', err);
-    res.status(500).json({ error: 'Failed to post message' });
-  }
-});
-
 // PATCH /api/chats/:id/end
 router.patch('/:id/end', async (req, res) => {
   const id = parseInt(req.params.id, 10);
@@ -102,6 +92,8 @@ router.patch('/:id/end', async (req, res) => {
       where: { id },
       data: {
         endedAt: new Date(),
+        isEnded: true,
+        isActive: false,
         ...(title ? { title } : {}),
       },
     });
