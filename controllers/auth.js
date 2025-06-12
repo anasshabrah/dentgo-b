@@ -155,8 +155,17 @@ router.post('/refresh', async (req, res) => {
 });
 
 // ───────── Logout ─────────
-router.post('/logout', requireAuth, async (req, res) => {
-  await prisma.refreshToken.deleteMany({ where: { userId: req.user.id } });
+// Removed requireAuth so logout never 401s; always clear cookies.
+// If a valid user is present, also delete their refresh tokens.
+router.post('/logout', async (req, res) => {
+  try {
+    if (req.user?.id) {
+      await prisma.refreshToken.deleteMany({ where: { userId: req.user.id } });
+    }
+  } catch (err) {
+    console.error('Logout cleanup error:', err);
+    // swallow any errors here so logout always succeeds
+  }
   clearAuthCookies(res);
   res.status(204).end();
 });
