@@ -1,4 +1,4 @@
-// src/middleware/corsConfig.js
+// backend/middleware/corsConfig.js
 import cors from 'cors';
 
 // Load your expected front-end origin from env (e.g. VITE_SERVER_URL’s host)
@@ -21,21 +21,13 @@ export const corsConfig = cors({
     if (!origin) {
       return callback(null, true);
     }
-
-    // exact matches
-    if (ALLOWED_ORIGINS.includes(origin)) {
+    if (ALLOWED_ORIGINS.includes(origin) || VERCEL_REGEX.test(origin)) {
       return callback(null, true);
     }
-
-    // match vercel staging sub-domains
-    if (VERCEL_REGEX.test(origin)) {
-      return callback(null, true);
-    }
-
-    // reject all others
     return callback(new Error(`CORS: origin "${origin}" not allowed`));
   },
   credentials: true,
+  // Ensure DELETE (and the preflight OPTIONS) are allowed
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
   exposedHeaders: ['Set-Cookie'],
