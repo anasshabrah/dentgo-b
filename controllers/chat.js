@@ -121,7 +121,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// NEW: GET /count?date=YYYY-MM-DD — returns number of messages by the user on that day
+// GET /count?date=YYYY-MM-DD — returns number of messages by the user on that day
 router.get('/count', async (req, res) => {
   try {
     const { date } = req.query;
@@ -145,6 +145,39 @@ router.get('/count', async (req, res) => {
   } catch (err) {
     console.error('💥 /chat/count error:', err);
     res.status(500).json({ error: 'Failed to count messages' });
+  }
+});
+
+// ✅ NEW: POST /end — mark chat as ended
+router.post('/end', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    const userId = req.user?.id;
+
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+
+    const session = await prisma.chatSession.findUnique({
+      where: { id: sessionId },
+      include: { user: true },
+    });
+
+    if (!session) return res.status(404).json({ error: 'Chat session not found' });
+    if (session.userId !== userId) return res.status(403).json({ error: 'Forbidden' });
+
+    await prisma.chatSession.update({
+      where: { id: sessionId },
+      data: {
+        endedAt: new Date(),
+        isEnded: true,
+        isActive: false,
+      },
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('💥 /chat/end error:', err);
+    res.status(500).json({ error: 'Failed to end chat session' });
   }
 });
 

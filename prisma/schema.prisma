@@ -74,6 +74,8 @@ model ChatSession {
   title     String?
   startedAt DateTime  @default(now())
   endedAt   DateTime?
+  isEnded    Boolean   @default(false)
+  isActive   Boolean   @default(true)
   userId    Int
   user      User      @relation(fields: [userId], references: [id])
   messages  Message[]
