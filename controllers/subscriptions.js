@@ -1,4 +1,4 @@
-// controllers/subscriptions.js
+// backend/controllers/subscriptions.js
 import express from 'express';
 import prisma from '../lib/prismaClient.js';
 
@@ -13,21 +13,29 @@ async function findSub(id, userId) {
 /* GET /api/subscriptions */
 router.get('/', async (req, res) => {
   try {
-    // Return only the active subscription, or null if none
+    // Try to find an active paid subscription
     const sub = await prisma.subscription.findFirst({
       where: { userId: req.user.id, status: 'ACTIVE' },
     });
 
+    // If none, explicitly return the Free plan
     if (!sub) {
-      return res.json(null);
+      return res.json({
+        subscriptionId: null,
+        status: 'free',
+        currentPeriodEnd: null,
+        plan: 'FREE',
+      });
     }
 
-    res.json({
+    // Otherwise map your paid sub
+    return res.json({
       subscriptionId: sub.stripeSubscriptionId,
-      status: sub.status.toLowerCase(), // 'active'
+      status: sub.status.toLowerCase(),
       currentPeriodEnd: sub.renewsAt
         ? Math.floor(sub.renewsAt.getTime() / 1000)
         : null,
+      plan: sub.plan, // e.g. "PLUS"
     });
   } catch (err) {
     console.error('GET /api/subscriptions error:', err);
@@ -55,7 +63,14 @@ router.post('/', async (req, res) => {
   const { plan, status, beganAt, renewsAt, cancelsAt } = req.body;
   try {
     const sub = await prisma.subscription.create({
-      data: { plan, status, beganAt, renewsAt, cancelsAt, userId: req.user.id },
+      data: {
+        userId: req.user.id,
+        plan,
+        status,
+        beganAt,
+        renewsAt,
+        cancelsAt,
+      },
     });
     res.status(201).json(sub);
   } catch (err) {
@@ -67,6 +82,7 @@ router.post('/', async (req, res) => {
 /* PUT /api/subscriptions/:id */
 router.put('/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
+  const { status, renewsAt, cancelsAt } = req.body;
   if (isNaN(id)) {
     return res.status(400).json({ error: 'Invalid subscription ID' });
   }
@@ -76,7 +92,6 @@ router.put('/:id', async (req, res) => {
     return res.status(404).json({ error: 'Subscription not found' });
   }
 
-  const { status, renewsAt, cancelsAt } = req.body;
   try {
     const updated = await prisma.subscription.update({
       where: { id },

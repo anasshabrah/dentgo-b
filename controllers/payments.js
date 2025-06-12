@@ -1,4 +1,4 @@
-// controllers/payments.js
+// backend/controllers/payments.js
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
@@ -258,5 +258,44 @@ export async function webhookHandler(req, res) {
 
   res.json({ received: true });
 }
+
+/**
+ * POST /api/payments/cancel-subscription
+ */
+router.post('/cancel-subscription', requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { subscriptionId } = req.body;
+    if (!subscriptionId) {
+      return res.status(400).json({ error: 'Missing subscriptionId' });
+    }
+
+    // Find our local subscription record
+    const sub = await prisma.subscription.findUnique({
+      where: { stripeSubscriptionId: subscriptionId },
+    });
+    if (!sub || sub.userId !== userId) {
+      return res.status(404).json({ error: 'Subscription not found' });
+    }
+
+    // Cancel in Stripe
+    const cancelled = await stripe.subscriptions.del(subscriptionId);
+
+    // Update local DB record
+    await prisma.subscription.update({
+      where: { id: sub.id },
+      data: {
+        status: cancelled.status.toUpperCase(),
+        cancelsAt: cancelled.cancel_at
+          ? new Date(cancelled.cancel_at * 1000)
+          : null,
+      },
+    });
+
+    res.json({ success: true, status: cancelled.status });
+  } catch (err) {
+    next(err);
+  }
+});
 
 export const paymentsRouter = router;
