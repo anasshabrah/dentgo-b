@@ -1,4 +1,4 @@
-// File: controllers/cards.js
+// controllers/cards.js
 import express from 'express';
 import prisma from '../lib/prismaClient.js';
 import Stripe from 'stripe';
@@ -54,21 +54,35 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    if (!user.stripeCustomerId) {
-      return res.status(400).json({
-        error: 'Stripe customer not found for user. Create one first.'
+    // 1) Ensure we have a Stripe customer
+    let user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    let customerId = user.stripeCustomerId;
+    if (!customerId) {
+      // create in test mode
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: user.name,
+      });
+      customerId = customer.id;
+      user = await prisma.user.update({
+        where: { id: userId },
+        data: { stripeCustomerId: customerId },
       });
     }
 
+    // 2) Attach the PaymentMethod
     await stripe.paymentMethods.attach(paymentMethodId, {
-      customer: user.stripeCustomerId,
+      customer: customerId,
     });
-    await stripe.customers.update(user.stripeCustomerId, {
+    await stripe.customers.update(customerId, {
       invoice_settings: { default_payment_method: paymentMethodId },
     });
 
+    // 3) Retrieve and persist card details
     const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
     const cardData = pm.card;
     if (!cardData) {
@@ -77,18 +91,14 @@ router.post('/', async (req, res) => {
 
     const network = cardData.brand.toUpperCase();
     const type = cardData.funding === 'debit' ? 'DEBIT' : 'CREDIT';
-    const last4 = cardData.last4;
-    const expMonth = cardData.exp_month;
-    const expYear = cardData.exp_year;
-
     const newCard = await prisma.card.create({
       data: {
-        paymentMethodId, // 🔧 Save it in the database
+        paymentMethodId,
         type,
         network,
-        last4,
-        expiryMonth: expMonth,
-        expiryYear: expYear,
+        last4: cardData.last4,
+        expiryMonth: cardData.exp_month,
+        expiryYear: cardData.exp_year,
         nickName: nickName || null,
         isActive: true,
         userId,
