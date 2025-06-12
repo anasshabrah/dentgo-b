@@ -10,11 +10,12 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 });
 
 const router = express.Router();
+router.use(requireAuth);
 
 /**
  * POST /api/payments/create-customer
  */
-router.post('/create-customer', requireAuth, async (req, res, next) => {
+router.post('/create-customer', async (req, res, next) => {
   try {
     const userId = req.user.id;
     const existingUser = await prisma.user.findUnique({ where: { id: userId } });
@@ -42,22 +43,22 @@ router.post('/create-customer', requireAuth, async (req, res, next) => {
 /**
  * POST /api/payments/create-setup-intent
  */
-router.post('/create-setup-intent', requireAuth, async (req, res, next) => {
+router.post('/create-setup-intent', async (req, res, next) => {
   try {
     const userId = req.user.id;
-    let existingUser = await prisma.user.findUnique({ where: { id: userId } });
-    if (!existingUser) return res.status(404).json({ error: 'User not found' });
+    let user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
-    let customerId = existingUser.stripeCustomerId;
+    let customerId = user.stripeCustomerId;
     if (!customerId) {
       const customer = await stripe.customers.create({
-        email: existingUser.email,
-        name: existingUser.name,
+        email: user.email,
+        name: user.name,
       });
       customerId = customer.id;
       await prisma.user.update({
         where: { id: userId },
-        data: { stripeCustomerId: customer.id },
+        data: { stripeCustomerId: customerId },
       });
     }
 
@@ -75,7 +76,7 @@ router.post('/create-setup-intent', requireAuth, async (req, res, next) => {
 /**
  * POST /api/payments/create-payment-intent
  */
-router.post('/create-payment-intent', requireAuth, async (req, res, next) => {
+router.post('/create-payment-intent', async (req, res, next) => {
   try {
     const userId = req.user.id;
     const { amount, currency } = req.body || {};
@@ -83,19 +84,19 @@ router.post('/create-payment-intent', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Missing amount or currency in request body' });
     }
 
-    let existingUser = await prisma.user.findUnique({ where: { id: userId } });
-    if (!existingUser) return res.status(404).json({ error: 'User not found' });
+    let user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
-    let customerId = existingUser.stripeCustomerId;
+    let customerId = user.stripeCustomerId;
     if (!customerId) {
       const customer = await stripe.customers.create({
-        email: existingUser.email,
-        name: existingUser.name,
+        email: user.email,
+        name: user.name,
       });
       customerId = customer.id;
       await prisma.user.update({
         where: { id: userId },
-        data: { stripeCustomerId: customer.id },
+        data: { stripeCustomerId: customerId },
       });
     }
 
@@ -115,24 +116,20 @@ router.post('/create-payment-intent', requireAuth, async (req, res, next) => {
 /**
  * POST /api/payments/create-subscription
  */
-router.post('/create-subscription', requireAuth, async (req, res, next) => {
+router.post('/create-subscription', async (req, res, next) => {
   try {
-    console.log('> create-subscription hit for user', req.user.id);
-
     const userId = req.user.id;
     const { priceId: frontendPriceId, paymentMethodId } = req.body || {};
     const priceId = frontendPriceId || 'FREE';
 
-    // ─── Free (Basic) plan ───
+    // ─── Free plan ───
     if (priceId === 'FREE') {
-      // look for an existing FREE subscription
       const existing = await prisma.subscription.findFirst({
         where: { userId, plan: 'FREE', status: 'ACTIVE' },
       });
-
       if (existing) {
         return res.json({
-          subscriptionId: existing.stripeSubscriptionId, // null
+          subscriptionId: existing.stripeSubscriptionId,
           status: existing.status.toLowerCase(),
           currentPeriodEnd: existing.renewsAt
             ? Math.floor(existing.renewsAt.getTime() / 1000)
@@ -140,8 +137,6 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
           plan: 'FREE',
         });
       }
-
-      // create a new FREE subscription record
       const now = new Date();
       const freeSub = await prisma.subscription.create({
         data: {
@@ -154,9 +149,8 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
           stripePriceId: null,
         },
       });
-
       return res.json({
-        subscriptionId: freeSub.stripeSubscriptionId, // null
+        subscriptionId: freeSub.stripeSubscriptionId,
         status: 'active',
         currentPeriodEnd: null,
         plan: 'FREE',
@@ -174,9 +168,7 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
     }
 
     // attach & set default payment method
-    await stripe.paymentMethods.attach(paymentMethodId, {
-      customer: user.stripeCustomerId,
-    });
+    await stripe.paymentMethods.attach(paymentMethodId, { customer: user.stripeCustomerId });
     await stripe.customers.update(user.stripeCustomerId, {
       invoice_settings: { default_payment_method: paymentMethodId },
     });
@@ -188,15 +180,11 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
       expand: ['latest_invoice.payment_intent'],
     });
 
-    // persist in our DB
+    // persist in DB
     const newSub = await prisma.subscription.create({
       data: {
         userId,
-        plan: priceId.includes('plus')
-          ? 'PLUS'
-          : priceId.includes('pro')
-          ? 'PRO'
-          : 'UNKNOWN',
+        plan: priceId.includes('plus') ? 'PLUS' : priceId.includes('pro') ? 'PRO' : 'UNKNOWN',
         status: subscription.status.toUpperCase(),
         beganAt: new Date(subscription.created * 1000),
         renewsAt: subscription.current_period_end
@@ -208,7 +196,7 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
     });
 
     const intent = subscription.latest_invoice.payment_intent;
-    return res.json({
+    res.json({
       subscriptionId: newSub.stripeSubscriptionId,
       clientSecret: intent.client_secret,
       status: subscription.status.toLowerCase(),
@@ -279,7 +267,7 @@ export async function webhookHandler(req, res) {
 /**
  * POST /api/payments/cancel-subscription
  */
-router.post('/cancel-subscription', requireAuth, async (req, res, next) => {
+router.post('/cancel-subscription', async (req, res, next) => {
   try {
     const userId = req.user.id;
     const { subscriptionId } = req.body;

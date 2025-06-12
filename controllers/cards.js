@@ -1,10 +1,15 @@
 // controllers/cards.js
 import express from 'express';
-import prisma from '../lib/prismaClient.js';
 import Stripe from 'stripe';
+import prisma from '../lib/prismaClient.js';
+import requireAuth from '../middleware/requireAuth.js';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const router = express.Router();
+router.use(requireAuth);
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2022-11-15',
+});
 
 /**
  * GET /api/cards
@@ -56,13 +61,10 @@ router.post('/', async (req, res) => {
   try {
     // 1) Ensure we have a Stripe customer
     let user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
     let customerId = user.stripeCustomerId;
     if (!customerId) {
-      // create in test mode
       const customer = await stripe.customers.create({
         email: user.email,
         name: user.name,
@@ -74,10 +76,8 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // 2) Attach the PaymentMethod
-    await stripe.paymentMethods.attach(paymentMethodId, {
-      customer: customerId,
-    });
+    // 2) Attach the PaymentMethod to that customer & set default
+    await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
     await stripe.customers.update(customerId, {
       invoice_settings: { default_payment_method: paymentMethodId },
     });
