@@ -5,7 +5,9 @@ import Stripe from 'stripe';
 import requireAuth from '../middleware/requireAuth.js';
 
 const prisma = new PrismaClient();
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2022-11-15',
+});
 
 const router = express.Router();
 
@@ -121,27 +123,25 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
     const { priceId: frontendPriceId, paymentMethodId } = req.body || {};
     const priceId = frontendPriceId || 'FREE';
 
-    // Free (Basic) plan: bypass Stripe
+    // ─── Free (Basic) plan ───
     if (priceId === 'FREE') {
-      // Check for existing active FREE plan
+      // look for an existing FREE subscription
       const existing = await prisma.subscription.findFirst({
-        where: {
-          userId,
-          plan: 'FREE',
-          status: 'ACTIVE',
-        },
+        where: { userId, plan: 'FREE', status: 'ACTIVE' },
       });
 
       if (existing) {
         return res.json({
-          subscriptionId: existing.id,
+          subscriptionId: existing.stripeSubscriptionId, // null
           status: existing.status.toLowerCase(),
           currentPeriodEnd: existing.renewsAt
             ? Math.floor(existing.renewsAt.getTime() / 1000)
             : null,
+          plan: 'FREE',
         });
       }
 
+      // create a new FREE subscription record
       const now = new Date();
       const freeSub = await prisma.subscription.create({
         data: {
@@ -156,13 +156,14 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
       });
 
       return res.json({
-        subscriptionId: freeSub.id,
+        subscriptionId: freeSub.stripeSubscriptionId, // null
         status: 'active',
         currentPeriodEnd: null,
+        plan: 'FREE',
       });
     }
 
-    // Paid plan: require paymentMethod
+    // ─── Paid plans ───
     if (!paymentMethodId) {
       return res.status(400).json({ error: 'Missing paymentMethodId' });
     }
@@ -172,7 +173,7 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Stripe customer not found for user' });
     }
 
-    // Attach payment method and set default
+    // attach & set default payment method
     await stripe.paymentMethods.attach(paymentMethodId, {
       customer: user.stripeCustomerId,
     });
@@ -180,17 +181,22 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
       invoice_settings: { default_payment_method: paymentMethodId },
     });
 
-    // Create Stripe subscription
+    // create the Stripe subscription
     const subscription = await stripe.subscriptions.create({
       customer: user.stripeCustomerId,
       items: [{ price: priceId }],
       expand: ['latest_invoice.payment_intent'],
     });
 
+    // persist in our DB
     const newSub = await prisma.subscription.create({
       data: {
         userId,
-        plan: priceId.includes('plus') ? 'PLUS' : priceId.includes('pro') ? 'PRO' : 'UNKNOWN',
+        plan: priceId.includes('plus')
+          ? 'PLUS'
+          : priceId.includes('pro')
+          ? 'PRO'
+          : 'UNKNOWN',
         status: subscription.status.toUpperCase(),
         beganAt: new Date(subscription.created * 1000),
         renewsAt: subscription.current_period_end
@@ -202,10 +208,14 @@ router.post('/create-subscription', requireAuth, async (req, res, next) => {
     });
 
     const intent = subscription.latest_invoice.payment_intent;
-    res.json({
+    return res.json({
       subscriptionId: newSub.stripeSubscriptionId,
       clientSecret: intent.client_secret,
-      status: subscription.status,
+      status: subscription.status.toLowerCase(),
+      currentPeriodEnd: newSub.renewsAt
+        ? Math.floor(newSub.renewsAt.getTime() / 1000)
+        : null,
+      plan: newSub.plan,
     });
   } catch (err) {
     next(err);
@@ -220,10 +230,14 @@ export async function webhookHandler(req, res) {
   let event;
 
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
   } catch (err) {
-    console.error('⚠️  Webhook signature verification failed.', err.message);
-    return res.status(400).send(Webhook Error: ${err.message});
+    console.error('⚠️ Webhook signature verification failed.', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   const handleSubscriptionUpdate = async (subscription) => {
@@ -242,7 +256,10 @@ export async function webhookHandler(req, res) {
       updates.cancelsAt = new Date(subscription.cancel_at * 1000);
     }
 
-    await prisma.subscription.update({ where: { id: existing.id }, data: updates });
+    await prisma.subscription.update({
+      where: { id: existing.id },
+      data: updates,
+    });
   };
 
   switch (event.type) {
@@ -270,7 +287,6 @@ router.post('/cancel-subscription', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Missing subscriptionId' });
     }
 
-    // Find our local subscription record
     const sub = await prisma.subscription.findUnique({
       where: { stripeSubscriptionId: subscriptionId },
     });
@@ -278,10 +294,8 @@ router.post('/cancel-subscription', requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: 'Subscription not found' });
     }
 
-    // Cancel in Stripe
     const cancelled = await stripe.subscriptions.del(subscriptionId);
 
-    // Update local DB record
     await prisma.subscription.update({
       where: { id: sub.id },
       data: {
@@ -292,7 +306,7 @@ router.post('/cancel-subscription', requireAuth, async (req, res, next) => {
       },
     });
 
-    res.json({ success: true, status: cancelled.status });
+    res.json({ success: true, status: cancelled.status.toLowerCase() });
   } catch (err) {
     next(err);
   }
