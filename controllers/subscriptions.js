@@ -1,4 +1,4 @@
-// backend/controllers/subscriptions.js
+// File: backend/controllers/subscriptions.js
 import express from 'express';
 import prisma from '../lib/prismaClient.js';
 
@@ -13,12 +13,16 @@ async function findSub(id, userId) {
 /* GET /api/subscriptions */
 router.get('/', async (req, res) => {
   try {
-    // Try to find an active paid subscription
+    // Look only for active, paid subscriptions (ignore FREE)
     const sub = await prisma.subscription.findFirst({
-      where: { userId: req.user.id, status: 'ACTIVE' },
+      where: {
+        userId: req.user.id,
+        status: 'ACTIVE',
+        plan: { not: 'FREE' },
+      },
     });
 
-    // If none, explicitly return the Free plan
+    // If no paid plan, return the explicit Free‐plan payload
     if (!sub) {
       return res.json({
         subscriptionId: null,
@@ -28,14 +32,14 @@ router.get('/', async (req, res) => {
       });
     }
 
-    // Otherwise map your paid sub
+    // Otherwise return the paid subscription
     return res.json({
       subscriptionId: sub.stripeSubscriptionId,
       status: sub.status.toLowerCase(),
       currentPeriodEnd: sub.renewsAt
         ? Math.floor(sub.renewsAt.getTime() / 1000)
         : null,
-      plan: sub.plan, // e.g. "PLUS"
+      plan: sub.plan, // e.g. "PLUS" or "PRO"
     });
   } catch (err) {
     console.error('GET /api/subscriptions error:', err);
