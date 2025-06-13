@@ -1,3 +1,4 @@
+// controllers/payments.js
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
@@ -160,19 +161,35 @@ router.post('/create-subscription', async (req, res, next) => {
     }
 
     // ─── PLUS plan ───
+    // 1) Prevent duplicate PLUS subscriptions
+    const existingPlus = await prisma.subscription.findFirst({
+      where: { userId, plan: 'PLUS', status: 'ACTIVE' },
+    });
+    if (existingPlus) {
+      return res.json({
+        subscriptionId: existingPlus.stripeSubscriptionId,
+        status: existingPlus.status.toLowerCase(),
+        currentPeriodEnd: existingPlus.renewsAt
+          ? Math.floor(existingPlus.renewsAt.getTime() / 1000)
+          : null,
+        plan: 'PLUS',
+      });
+    }
+
+    // 2) Need a payment method
     if (!paymentMethodId) {
       return res
         .status(400)
         .json({ error: 'Missing paymentMethodId for PLUS plan' });
     }
+
+    // 3) Attach & set default PM
     const userRecord = await prisma.user.findUnique({ where: { id: userId } });
     if (!userRecord?.stripeCustomerId) {
       return res
         .status(400)
         .json({ error: 'Stripe customer not found for user' });
     }
-
-    // Attach and set default
     await stripe.paymentMethods.attach(paymentMethodId, {
       customer: userRecord.stripeCustomerId,
     });
@@ -180,14 +197,14 @@ router.post('/create-subscription', async (req, res, next) => {
       invoice_settings: { default_payment_method: paymentMethodId },
     });
 
-    // Create subscription
+    // 4) Create Stripe subscription, expanding invoice.payment_intent
     const stripeSub = await stripe.subscriptions.create({
       customer: userRecord.stripeCustomerId,
       items: [{ price: selectedPriceId }],
       expand: ['latest_invoice.payment_intent'],
     });
 
-    // Persist
+    // 5) Persist to your DB
     const newSub = await prisma.subscription.create({
       data: {
         userId,
@@ -202,10 +219,11 @@ router.post('/create-subscription', async (req, res, next) => {
       },
     });
 
-    const intent = stripeSub.latest_invoice.payment_intent;
+    // 6) Safely pull out the client_secret (if any)
+    const invoiceIntent = stripeSub.latest_invoice?.payment_intent;
     res.json({
       subscriptionId: newSub.stripeSubscriptionId,
-      clientSecret: intent.client_secret,
+      clientSecret: invoiceIntent?.client_secret || null,
       status: stripeSub.status.toLowerCase(),
       currentPeriodEnd: newSub.renewsAt
         ? Math.floor(newSub.renewsAt.getTime() / 1000)
@@ -259,6 +277,7 @@ router.post('/cancel-subscription', async (req, res, next) => {
  * Export for mounting & raw webhook use
  */
 export const paymentsRouter = router;
+
 export async function webhookHandler(req, res) {
   const sig = req.headers['stripe-signature'];
   let event;
