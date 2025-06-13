@@ -5,12 +5,18 @@ import bcrypt from 'bcrypt';
 import passport from 'passport';
 import { OAuth2Client } from 'google-auth-library';
 import { v4 as uuid } from 'uuid';
+import Stripe from 'stripe';
+
 import prisma from '../lib/prismaClient.js';
 import requireAuth from '../middleware/requireAuth.js';
 import { authCookieOpts, clearCookieOpts } from '../middleware/cookieConfig.js';
 
 const router = express.Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2022-11-15',
+});
+
 const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;
 const REFRESH_TTL = +process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60;
 
@@ -155,8 +161,6 @@ router.post('/refresh', async (req, res) => {
 });
 
 // ───────── Logout ─────────
-// Removed requireAuth so logout never 401s; always clear cookies.
-// If a valid user is present, also delete their refresh tokens.
 router.post('/logout', async (req, res) => {
   try {
     if (req.user?.id) {
@@ -164,7 +168,6 @@ router.post('/logout', async (req, res) => {
     }
   } catch (err) {
     console.error('Logout cleanup error:', err);
-    // swallow any errors here so logout always succeeds
   }
   clearAuthCookies(res);
   res.status(204).end();
@@ -175,11 +178,28 @@ router.delete('/delete', requireAuth, async (req, res) => {
   const userId = req.user.id;
   try {
     console.log(`Deleting account for user ID: ${userId}`);
+
+    // 1) Find any active Stripe subscriptions for this user
+    const activeSubs = await prisma.subscription.findMany({
+      where: {
+        userId,
+        stripeSubscriptionId: { not: null },
+        status: 'ACTIVE'
+      },
+      select: { stripeSubscriptionId: true }
+    });
+
+    // 2) Cancel them at Stripe
+    await Promise.all(activeSubs.map(s =>
+      stripe.subscriptions.del(s.stripeSubscriptionId!)
+    ));
+
+    // 3) Delete all user-related data in a single transaction
     const sessions = await prisma.chatSession.findMany({
       where: { userId },
       select: { id: true },
     });
-    const chatIds = sessions.map((s) => s.id);
+    const chatIds = sessions.map(s => s.id);
 
     await prisma.$transaction([
       prisma.message.deleteMany({ where: { chatId: { in: chatIds } } }),
