@@ -24,20 +24,18 @@ const REFRESH_TTL = +process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60;
 
 // ───────── Rate Limiter ─────────
 const authLimiter = rateLimit({
-  windowMs: 60 * 1000,             // 1 minute
-  max: 10,                         // limit each IP to 10 requests per windowMs
+  windowMs: 60 * 1000,
+  max: 10,
   message: { error: 'Too many auth attempts – please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 router.use(authLimiter);
 
-// ───────── Email Normalization ─────────
 function normalizeEmail(email) {
   return typeof email === 'string' ? email.toLowerCase().trim() : email;
 }
 
-// ───────── JWT Helpers ─────────
 function signAccess(user) {
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role },
@@ -59,7 +57,6 @@ async function issueRefresh(user) {
   return raw;
 }
 
-// ───────── Cookie Helpers ─────────
 function setAuthCookies(res, access, refresh) {
   const opts = authCookieOpts();
   res.cookie('accessToken', access, { ...opts, maxAge: ACCESS_TTL * 1000 });
@@ -72,8 +69,6 @@ function clearAuthCookies(res) {
   res.clearCookie('refreshToken', opts);
 }
 
-// ───────── CSRF middleware ─────────
-// note: same strict cookie options as in server.js
 const csrfProtection = csurf({
   cookie: {
     httpOnly: true,
@@ -82,12 +77,10 @@ const csrfProtection = csurf({
   }
 });
 
-// ───────── CSRF token endpoint ─────────
 router.get('/csrf-token', csrfProtection, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
-// ───────── Google OAuth via Passport ─────────
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
 router.get(
@@ -119,7 +112,6 @@ router.get(
   }
 );
 
-// ───────── Google One-Tap ─────────
 router.post('/google', csrfProtection, async (req, res) => {
   const { credential } = req.body;
   if (!credential) return res.status(400).json({ error: 'Missing credential' });
@@ -153,7 +145,6 @@ router.post('/google', csrfProtection, async (req, res) => {
   }
 });
 
-// ───────── Apple OAuth via Passport ─────────
 router.get('/apple', passport.authenticate('apple'));
 
 router.post(
@@ -197,7 +188,6 @@ router.post(
   }
 );
 
-// ───────── Refresh Token ─────────
 router.post('/refresh', async (req, res) => {
   const token = req.cookies.refreshToken;
   if (!token) return res.status(401).json({ error: 'No refresh token provided' });
@@ -225,7 +215,7 @@ router.post('/refresh', async (req, res) => {
 });
 
 // ───────── Logout ─────────
-router.post('/logout', async (req, res) => {
+router.post('/logout', csrfProtection, async (req, res) => {
   try {
     if (req.user?.id) {
       await prisma.refreshToken.deleteMany({ where: { userId: req.user.id } });
@@ -243,7 +233,6 @@ router.delete('/delete', requireAuth, async (req, res) => {
   try {
     console.log(`Deleting account for user ID: ${userId}`);
 
-    // 1) Find any active Stripe subscriptions for this user
     const activeSubs = await prisma.subscription.findMany({
       where: {
         userId,
@@ -253,12 +242,10 @@ router.delete('/delete', requireAuth, async (req, res) => {
       select: { stripeSubscriptionId: true },
     });
 
-    // 2) Cancel them at Stripe
     await Promise.all(activeSubs.map(s =>
       stripe.subscriptions.del(s.stripeSubscriptionId)
     ));
 
-    // 2.5) Delete the Stripe Customer (and all attached payment methods)
     const userRecord = await prisma.user.findUnique({ where: { id: userId } });
     if (userRecord?.stripeCustomerId) {
       try {
@@ -269,7 +256,6 @@ router.delete('/delete', requireAuth, async (req, res) => {
       }
     }
 
-    // 3) Delete all user-related data in a single transaction
     const sessions = await prisma.chatSession.findMany({
       where: { userId },
       select: { id: true },
