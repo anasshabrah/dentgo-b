@@ -1,4 +1,5 @@
-// backend/server.js
+// \backend\server.js
+
 import 'dotenv/config';
 import './lib/passport.js';
 import express from 'express';
@@ -76,8 +77,18 @@ const csrfProtection = csurf({
   }
 });
 
-// 8) Public auth, now with CSRF
-app.use('/api/auth', csrfProtection, authRoute);
+// 8) Public auth—only apply CSRF to browser‐driven routes, skip on /refresh
+app.use(
+  '/api/auth',
+  (req, res, next) => {
+    // our refresh token rotation happens via a silent fetch, so skip CSRF there
+    if (req.path === '/refresh' && req.method === 'POST') {
+      return next();
+    }
+    return csrfProtection(req, res, next);
+  },
+  authRoute
+);
 
 // 9) Protected payments
 app.use('/api/payments', requireAuth, paymentsRouter);
