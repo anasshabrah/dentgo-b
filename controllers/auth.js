@@ -75,19 +75,40 @@ function clearAuthCookies(res) {
 // ───────── CSRF middleware ─────────
 const csrfProtection = csurf({ cookie: true });
 
+// ───────── CSRF token endpoint ─────────
+router.get('/csrf-token', csrfProtection, (req, res) => {
+  res.json({ csrfToken: req.csrfToken() });
+});
+
 // ───────── Google OAuth via Passport ─────────
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
 router.get(
   '/google/callback',
   csrfProtection,
-  passport.authenticate('google', { session: false, failureRedirect: '/LetsYouIn' }),
-  async (req, res) => {
-    const user = req.user;
-    const access = signAccess(user);
-    const refresh = await issueRefresh(user);
-    setAuthCookies(res, access, refresh);
-    res.redirect(process.env.FRONTEND_ORIGIN);
+  (req, res, next) => {
+    passport.authenticate(
+      'google',
+      { session: false, failureRedirect: '/LetsYouIn' },
+      async (err, user, info) => {
+        if (err) {
+          console.error('🔴 Google OAuth error:', err);
+          return next(err);
+        }
+        if (!user) {
+          console.error('🔴 Google OAuth failed, info:', info);
+          return res.redirect('/LetsYouIn');
+        }
+        try {
+          const access = signAccess(user);
+          const refresh = await issueRefresh(user);
+          setAuthCookies(res, access, refresh);
+          res.redirect(process.env.FRONTEND_ORIGIN);
+        } catch (e) {
+          next(e);
+        }
+      }
+    )(req, res, next);
   }
 );
 
@@ -125,35 +146,47 @@ router.post('/google', async (req, res) => {
   }
 });
 
-// ───────── Apple OAuth Callback ─────────
+// ───────── Apple OAuth via Passport ─────────
 router.get('/apple', passport.authenticate('apple'));
 
 router.post(
   '/apple/callback',
   csrfProtection,
-  passport.authenticate('apple', { session: false, failureRedirect: '/LetsYouIn' }),
-  async (req, res) => {
-    try {
-      const { providerUserId, email: rawEmail, name } = req.user;
-      const email = normalizeEmail(rawEmail);
-      const user = await prisma.user.upsert({
-        where: { email },
-        update: { name },
-        create: { name, email, picture: null },
-      });
-      await prisma.oAuthAccount.upsert({
-        where: { provider_providerUserId: { provider: 'apple', providerUserId } },
-        update: {},
-        create: { provider: 'apple', providerUserId, userId: user.id },
-      });
-      const access = signAccess(user);
-      const refresh = await issueRefresh(user);
-      setAuthCookies(res, access, refresh);
-      res.json({ user });
-    } catch (err) {
-      console.error('Apple OAuth error:', err);
-      res.status(500).json({ error: 'Authentication failed' });
-    }
+  (req, res, next) => {
+    passport.authenticate(
+      'apple',
+      { session: false, failureRedirect: '/LetsYouIn' },
+      async (err, user, info) => {
+        if (err) {
+          console.error('🔴 Apple OAuth error:', err);
+          return next(err);
+        }
+        if (!user) {
+          console.error('🔴 Apple OAuth failed, info:', info);
+          return res.redirect('/LetsYouIn');
+        }
+        try {
+          const { providerUserId, email: rawEmail, name } = user;
+          const email = normalizeEmail(rawEmail);
+          const upsertedUser = await prisma.user.upsert({
+            where: { email },
+            update: { name },
+            create: { name, email, picture: null },
+          });
+          await prisma.oAuthAccount.upsert({
+            where: { provider_providerUserId: { provider: 'apple', providerUserId } },
+            update: {},
+            create: { provider: 'apple', providerUserId, userId: upsertedUser.id },
+          });
+          const access = signAccess(upsertedUser);
+          const refresh = await issueRefresh(upsertedUser);
+          setAuthCookies(res, access, refresh);
+          res.json({ user: upsertedUser });
+        } catch (e) {
+          next(e);
+        }
+      }
+    )(req, res, next);
   }
 );
 
@@ -215,7 +248,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
 
     // 2) Cancel them at Stripe
     await Promise.all(activeSubs.map(s =>
-      stripe.subscriptions.del(s.stripeSubscriptionId!)
+      stripe.subscriptions.del(s.stripeSubscriptionId)
     ));
 
     // 2.5) Delete the Stripe Customer (and all attached payment methods)
@@ -226,7 +259,6 @@ router.delete('/delete', requireAuth, async (req, res) => {
         console.log(`Deleted Stripe customer ${userRecord.stripeCustomerId}`);
       } catch (stripeErr) {
         console.error('Failed to delete Stripe customer:', stripeErr);
-        // proceed with account deletion anyway
       }
     }
 
