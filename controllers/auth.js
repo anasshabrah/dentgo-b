@@ -7,7 +7,7 @@ import rateLimit from 'express-rate-limit';
 import { OAuth2Client } from 'google-auth-library';
 import { v4 as uuid } from 'uuid';
 import Stripe from 'stripe';
-import csurf from 'csurf';
+import csurf from '@dr.pogodin/csurf';
 
 import prisma from '../lib/prismaClient.js';
 import requireAuth from '../middleware/requireAuth.js';
@@ -73,7 +73,14 @@ function clearAuthCookies(res) {
 }
 
 // ───────── CSRF middleware ─────────
-const csrfProtection = csurf({ cookie: true });
+// note: same strict cookie options as in server.js
+const csrfProtection = csurf({
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+  }
+});
 
 // ───────── CSRF token endpoint ─────────
 router.get('/csrf-token', csrfProtection, (req, res) => {
@@ -113,7 +120,7 @@ router.get(
 );
 
 // ───────── Google One-Tap ─────────
-router.post('/google', async (req, res) => {
+router.post('/google', csrfProtection, async (req, res) => {
   const { credential } = req.body;
   if (!credential) return res.status(400).json({ error: 'Missing credential' });
   try {

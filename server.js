@@ -4,7 +4,7 @@ import './lib/passport.js';
 import express from 'express';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
-import csurf from 'csurf';
+import csurf from '@dr.pogodin/csurf';
 import passport from 'passport';
 import rateLimit from 'express-rate-limit';
 
@@ -67,8 +67,14 @@ app.use(express.json());
 // 6) Passport init
 app.use(passport.initialize());
 
-// 7) CSRF protection for auth routes (tokens stored in cookie)
-const csrfProtection = csurf({ cookie: true });
+// 7) CSRF protection for auth routes (using double-submit cookie with strict SameSite)
+const csrfProtection = csurf({
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+  }
+});
 
 // 8) Public auth, now with CSRF
 app.use('/api/auth', csrfProtection, authRoute);

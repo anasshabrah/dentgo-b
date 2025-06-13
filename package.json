@@ -17,6 +17,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@dr.pogodin/csurf": "^1.16.5",
     "@prisma/client": "^6.8.2",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
