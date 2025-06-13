@@ -135,7 +135,6 @@ enum CardNetwork {
 enum SubscriptionPlan {
   FREE
   PLUS
-  PRO
 }
 
 enum SubscriptionStatus {
