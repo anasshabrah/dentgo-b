@@ -77,12 +77,13 @@ const csrfProtection = csurf({
   }
 });
 
+// ───────── CSRF ─────────
 router.get('/csrf-token', csrfProtection, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
+// ───────── OAuth: Google ─────────
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
-
 router.get(
   '/google/callback',
   csrfProtection,
@@ -91,14 +92,8 @@ router.get(
       'google',
       { session: false, failureRedirect: '/LetsYouIn' },
       async (err, user, info) => {
-        if (err) {
-          console.error('🔴 Google OAuth error:', err);
-          return next(err);
-        }
-        if (!user) {
-          console.error('🔴 Google OAuth failed, info:', info);
-          return res.redirect('/LetsYouIn');
-        }
+        if (err) return next(err);
+        if (!user) return res.redirect('/LetsYouIn');
         try {
           const access = signAccess(user);
           const refresh = await issueRefresh(user);
@@ -128,7 +123,6 @@ router.post('/google', csrfProtection, async (req, res) => {
       update: { name, picture },
       create: { name, email, picture },
     });
-
     await prisma.oAuthAccount.upsert({
       where: { provider_providerUserId: { provider: 'google', providerUserId } },
       update: {},
@@ -145,8 +139,8 @@ router.post('/google', csrfProtection, async (req, res) => {
   }
 });
 
+// ───────── OAuth: Apple ─────────
 router.get('/apple', passport.authenticate('apple'));
-
 router.post(
   '/apple/callback',
   csrfProtection,
@@ -155,14 +149,8 @@ router.post(
       'apple',
       { session: false, failureRedirect: '/LetsYouIn' },
       async (err, user, info) => {
-        if (err) {
-          console.error('🔴 Apple OAuth error:', err);
-          return next(err);
-        }
-        if (!user) {
-          console.error('🔴 Apple OAuth failed, info:', info);
-          return res.redirect('/LetsYouIn');
-        }
+        if (err) return next(err);
+        if (!user) return res.redirect('/LetsYouIn');
         try {
           const { providerUserId, email: rawEmail, name } = user;
           const email = normalizeEmail(rawEmail);
@@ -176,6 +164,7 @@ router.post(
             update: {},
             create: { provider: 'apple', providerUserId, userId: upsertedUser.id },
           });
+
           const access = signAccess(upsertedUser);
           const refresh = await issueRefresh(upsertedUser);
           setAuthCookies(res, access, refresh);
@@ -188,6 +177,7 @@ router.post(
   }
 );
 
+// ───────── Refresh Token ─────────
 router.post('/refresh', async (req, res) => {
   const token = req.cookies.refreshToken;
   if (!token) return res.status(401).json({ error: 'No refresh token provided' });
@@ -204,7 +194,6 @@ router.post('/refresh', async (req, res) => {
       break;
     }
   }
-
   if (!match) return res.status(401).json({ error: 'Invalid refresh token' });
 
   await prisma.refreshToken.delete({ where: { id: match.id } });
@@ -233,29 +222,31 @@ router.delete('/delete', requireAuth, async (req, res) => {
   try {
     console.log(`Deleting account for user ID: ${userId}`);
 
+    // 1) Cancel all active Stripe subscriptions immediately
     const activeSubs = await prisma.subscription.findMany({
-      where: {
-        userId,
-        stripeSubscriptionId: { not: null },
-        status: 'ACTIVE',
-      },
+      where: { userId, stripeSubscriptionId: { not: null }, status: 'ACTIVE' },
       select: { stripeSubscriptionId: true },
     });
+    await Promise.all(
+      activeSubs.map(s => stripe.subscriptions.del(s.stripeSubscriptionId))
+    );
 
-    await Promise.all(activeSubs.map(s =>
-      stripe.subscriptions.del(s.stripeSubscriptionId)
-    ));
-
+    // 2) Detach all saved payment methods
     const userRecord = await prisma.user.findUnique({ where: { id: userId } });
     if (userRecord?.stripeCustomerId) {
-      try {
-        await stripe.customers.del(userRecord.stripeCustomerId);
-        console.log(`Deleted Stripe customer ${userRecord.stripeCustomerId}`);
-      } catch (stripeErr) {
-        console.error('Failed to delete Stripe customer:', stripeErr);
-      }
+      const { data: methods } = await stripe.paymentMethods.list({
+        customer: userRecord.stripeCustomerId,
+        type: 'card',
+      });
+      await Promise.all(
+        methods.map(pm => stripe.paymentMethods.detach(pm.id))
+      );
+      // 3) Delete the Stripe customer
+      await stripe.customers.del(userRecord.stripeCustomerId);
+      console.log(`Deleted Stripe customer ${userRecord.stripeCustomerId}`);
     }
 
+    // 4) Wipe out everything in your database: messages, sessions, tokens, cards, subscriptions, users...
     const sessions = await prisma.chatSession.findMany({
       where: { userId },
       select: { id: true },
@@ -273,6 +264,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
       prisma.user.delete({ where: { id: userId } }),
     ]);
 
+    // 5) Clear cookies & respond
     clearAuthCookies(res);
     console.log(`✅ Successfully deleted account for user ID: ${userId}`);
     res.status(204).end();
