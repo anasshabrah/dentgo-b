@@ -18,7 +18,8 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2022-11-15',
 });
-const deleteSubscription = stripe.subscriptions.delete.bind(stripe.subscriptions);
+// alias the correct method
+const cancelSubscription = stripe.subscriptions.del.bind(stripe.subscriptions);
 
 const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;
 const REFRESH_TTL = +process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60;
@@ -208,7 +209,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
     await Promise.all(
       activeSubs.map(async ({ stripeSubscriptionId }) => {
         try {
-          await deleteSubscription(stripeSubscriptionId);
+          await cancelSubscription(stripeSubscriptionId);
         } catch (err) {
           console.warn(
             `⚠️ Could not cancel Stripe subscription ${stripeSubscriptionId}:`,
