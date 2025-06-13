@@ -6,7 +6,7 @@ import requireAuth from '../middleware/requireAuth.js';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2022-11-15',
+  apiVersion: '2025-05-28.basil',
 });
 
 const router = express.Router();
@@ -157,7 +157,7 @@ router.post('/create-subscription', async (req, res, next) => {
       });
     }
 
-    // ─── Paid plans ───
+    // ─── Paid plan (PLUS) ───
     if (!paymentMethodId) {
       return res.status(400).json({ error: 'Missing paymentMethodId' });
     }
@@ -180,11 +180,11 @@ router.post('/create-subscription', async (req, res, next) => {
       expand: ['latest_invoice.payment_intent'],
     });
 
-    // persist in DB
+    // persist in DB, mapping any non-FREE to PLUS
     const newSub = await prisma.subscription.create({
       data: {
         userId,
-        plan: priceId.includes('plus') ? 'PLUS' : priceId.includes('pro') ? 'PRO' : 'UNKNOWN',
+        plan: 'PLUS',
         status: subscription.status.toUpperCase(),
         beganAt: new Date(subscription.created * 1000),
         renewsAt: subscription.current_period_end
