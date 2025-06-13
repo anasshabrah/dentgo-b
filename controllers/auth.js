@@ -18,6 +18,7 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2022-11-15',
 });
+const deleteSubscription = stripe.subscriptions.delete.bind(stripe.subscriptions);
 
 const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;
 const REFRESH_TTL = +process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60;
@@ -199,6 +200,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
   try {
     console.log(`Deleting account for user ID: ${userId}`);
 
+    // Cancel all active Stripe subscriptions, but continue if any fail
     const activeSubs = await prisma.subscription.findMany({
       where: { userId, stripeSubscriptionId: { not: null }, status: 'ACTIVE' },
       select: { stripeSubscriptionId: true },
@@ -206,13 +208,17 @@ router.delete('/delete', requireAuth, async (req, res) => {
     await Promise.all(
       activeSubs.map(async ({ stripeSubscriptionId }) => {
         try {
-          await stripe.subscriptions.del(stripeSubscriptionId);
+          await deleteSubscription(stripeSubscriptionId);
         } catch (err) {
-          console.warn(`⚠️ Could not immediately delete Stripe subscription ${stripeSubscriptionId}:`, err.message || err);
+          console.warn(
+            `⚠️ Could not cancel Stripe subscription ${stripeSubscriptionId}:`,
+            err.message || err
+          );
         }
       })
     );
 
+    // Remove customer payment methods and delete the Stripe customer
     const userRecord = await prisma.user.findUnique({ where: { id: userId } });
     if (userRecord?.stripeCustomerId) {
       const { data: methods } = await stripe.paymentMethods.list({
@@ -224,12 +230,14 @@ router.delete('/delete', requireAuth, async (req, res) => {
       console.log(`Deleted Stripe customer ${userRecord.stripeCustomerId}`);
     }
 
+    // Gather all chat session IDs for cascade deletes
     const sessions = await prisma.chatSession.findMany({
       where: { userId },
       select: { id: true },
     });
     const chatIds = sessions.map(s => s.id);
 
+    // Delete all related records in a single transaction
     await prisma.$transaction([
       prisma.message.deleteMany({ where: { chatId: { in: chatIds } } }),
       prisma.chatSession.deleteMany({ where: { userId } }),
