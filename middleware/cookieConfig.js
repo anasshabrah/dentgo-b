@@ -1,11 +1,12 @@
-// middleware/cookieConfig.js
+// backend/middleware/cookieConfig.js
 
 // Base cookie options, with domain only in production so localhost cookies work in dev
 const baseCookieOptions = {
   httpOnly: true,
+  // In production we require secure; in dev it's false
   secure: process.env.NODE_ENV === 'production',
-  // In production, we need SameSite='none' for cross-site cookies; in dev, lax is fine
-  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+  // Always allow cross-site cookies so fetch()/DELETE include them
+  sameSite: 'none',
   path: '/',
   // Only set domain in production (scope to your public domain)
   ...(process.env.NODE_ENV === 'production'
