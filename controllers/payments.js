@@ -1,4 +1,3 @@
-// backend/controllers/payments.js
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
@@ -10,6 +9,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 });
 
 const router = express.Router();
+// All routes except webhook require a parsed JSON + auth
 router.use(requireAuth);
 
 /**
@@ -121,12 +121,11 @@ router.post('/create-subscription', async (req, res, next) => {
     const userId = req.user.id;
     const { priceId: frontendPriceId, paymentMethodId } = req.body || {};
 
-    // If no priceId provided, assume FREE plan
+    // map FREE/PLUS
     const selectedPriceId = frontendPriceId || 'FREE';
 
     // ─── FREE plan ───
     if (selectedPriceId === 'FREE') {
-      // Check if they already have an active FREE sub
       const existing = await prisma.subscription.findFirst({
         where: { userId, plan: 'FREE', status: 'ACTIVE' },
       });
@@ -140,8 +139,6 @@ router.post('/create-subscription', async (req, res, next) => {
           plan: 'FREE',
         });
       }
-
-      // Create a new FREE subscription record
       const now = new Date();
       const freeSub = await prisma.subscription.create({
         data: {
@@ -154,7 +151,6 @@ router.post('/create-subscription', async (req, res, next) => {
           stripePriceId: null,
         },
       });
-
       return res.json({
         subscriptionId: freeSub.stripeSubscriptionId,
         status: 'active',
@@ -165,15 +161,18 @@ router.post('/create-subscription', async (req, res, next) => {
 
     // ─── PLUS plan ───
     if (!paymentMethodId) {
-      return res.status(400).json({ error: 'Missing paymentMethodId for PLUS plan' });
+      return res
+        .status(400)
+        .json({ error: 'Missing paymentMethodId for PLUS plan' });
     }
-
     const userRecord = await prisma.user.findUnique({ where: { id: userId } });
     if (!userRecord?.stripeCustomerId) {
-      return res.status(400).json({ error: 'Stripe customer not found for user' });
+      return res
+        .status(400)
+        .json({ error: 'Stripe customer not found for user' });
     }
 
-    // Attach the payment method and set it as default
+    // Attach and set default
     await stripe.paymentMethods.attach(paymentMethodId, {
       customer: userRecord.stripeCustomerId,
     });
@@ -181,18 +180,18 @@ router.post('/create-subscription', async (req, res, next) => {
       invoice_settings: { default_payment_method: paymentMethodId },
     });
 
-    // Create the Stripe subscription
+    // Create subscription
     const stripeSub = await stripe.subscriptions.create({
       customer: userRecord.stripeCustomerId,
       items: [{ price: selectedPriceId }],
       expand: ['latest_invoice.payment_intent'],
     });
 
-    // Persist to your DB (map everything non-FREE → PLUS)
+    // Persist
     const newSub = await prisma.subscription.create({
       data: {
         userId,
-        plan: 'PLUS',  // only remaining paid tier
+        plan: 'PLUS',
         status: stripeSub.status.toUpperCase(),
         beganAt: new Date(stripeSub.created * 1000),
         renewsAt: stripeSub.current_period_end
@@ -211,57 +210,12 @@ router.post('/create-subscription', async (req, res, next) => {
       currentPeriodEnd: newSub.renewsAt
         ? Math.floor(newSub.renewsAt.getTime() / 1000)
         : null,
-      plan: newSub.plan, // will be 'PLUS'
+      plan: newSub.plan,
     });
   } catch (err) {
     next(err);
   }
 });
-
-/**
- * Webhook handler
- */
-export async function webhookHandler(req, res) {
-  const sig = req.headers['stripe-signature'];
-  let event;
-
-  try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-  } catch (err) {
-    console.error('⚠️ Webhook signature verification failed.', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  // Update your DB whenever Stripe notifies of status changes
-  if (
-    ['invoice.payment_succeeded', 'invoice.payment_failed', 
-     'customer.subscription.updated', 'customer.subscription.deleted']
-      .includes(event.type)
-  ) {
-    const sub = event.data.object;
-    const existing = await prisma.subscription.findUnique({
-      where: { stripeSubscriptionId: sub.id },
-    });
-    if (existing) {
-      await prisma.subscription.update({
-        where: { id: existing.id },
-        data: {
-          status: sub.status.toUpperCase(),
-          renewsAt: sub.current_period_end
-            ? new Date(sub.current_period_end * 1000)
-            : existing.renewsAt,
-          cancelsAt: sub.cancel_at ? new Date(sub.cancel_at * 1000) : undefined,
-        },
-      });
-    }
-  }
-
-  res.json({ received: true });
-}
 
 /**
  * POST /api/payments/cancel-subscription
@@ -284,7 +238,7 @@ router.post('/cancel-subscription', async (req, res, next) => {
     // Cancel in Stripe
     const canceled = await stripe.subscriptions.del(subscriptionId);
 
-    // Mirror in your DB
+    // Mirror in DB
     await prisma.subscription.update({
       where: { id: sub.id },
       data: {
@@ -301,4 +255,52 @@ router.post('/cancel-subscription', async (req, res, next) => {
   }
 });
 
+/**
+ * Export for mounting & raw webhook use
+ */
 export const paymentsRouter = router;
+export async function webhookHandler(req, res) {
+  const sig = req.headers['stripe-signature'];
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error('⚠️ Webhook signature verification failed.', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Handle subscription & invoice events
+  if (
+    [
+      'invoice.payment_succeeded',
+      'invoice.payment_failed',
+      'customer.subscription.updated',
+      'customer.subscription.deleted',
+    ].includes(event.type)
+  ) {
+    const sub = event.data.object;
+    const existing = await prisma.subscription.findUnique({
+      where: { stripeSubscriptionId: sub.id },
+    });
+    if (existing) {
+      await prisma.subscription.update({
+        where: { id: existing.id },
+        data: {
+          status: sub.status.toUpperCase(),
+          renewsAt: sub.current_period_end
+            ? new Date(sub.current_period_end * 1000)
+            : existing.renewsAt,
+          cancelsAt: sub.cancel_at
+            ? new Date(sub.cancel_at * 1000)
+            : existing.cancelsAt,
+        },
+      });
+    }
+  }
+
+  res.json({ received: true });
+}
