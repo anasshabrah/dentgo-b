@@ -1,11 +1,13 @@
-// controllers/auth.js
+// backend/controllers/auth.js
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import passport from 'passport';
+import rateLimit from 'express-rate-limit';
 import { OAuth2Client } from 'google-auth-library';
 import { v4 as uuid } from 'uuid';
 import Stripe from 'stripe';
+import csurf from 'csurf';
 
 import prisma from '../lib/prismaClient.js';
 import requireAuth from '../middleware/requireAuth.js';
@@ -19,6 +21,16 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 
 const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;
 const REFRESH_TTL = +process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60;
+
+// ───────── Rate Limiter ─────────
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,             // 1 minute
+  max: 10,                         // limit each IP to 10 requests per windowMs
+  message: { error: 'Too many auth attempts – please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+router.use(authLimiter);
 
 // ───────── Email Normalization ─────────
 function normalizeEmail(email) {
@@ -60,11 +72,15 @@ function clearAuthCookies(res) {
   res.clearCookie('refreshToken', opts);
 }
 
+// ───────── CSRF middleware ─────────
+const csrfProtection = csurf({ cookie: true });
+
 // ───────── Google OAuth via Passport ─────────
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
 router.get(
   '/google/callback',
+  csrfProtection,
   passport.authenticate('google', { session: false, failureRedirect: '/LetsYouIn' }),
   async (req, res) => {
     const user = req.user;
@@ -114,6 +130,7 @@ router.get('/apple', passport.authenticate('apple'));
 
 router.post(
   '/apple/callback',
+  csrfProtection,
   passport.authenticate('apple', { session: false, failureRedirect: '/LetsYouIn' }),
   async (req, res) => {
     try {
@@ -191,15 +208,27 @@ router.delete('/delete', requireAuth, async (req, res) => {
       where: {
         userId,
         stripeSubscriptionId: { not: null },
-        status: 'ACTIVE'
+        status: 'ACTIVE',
       },
-      select: { stripeSubscriptionId: true }
+      select: { stripeSubscriptionId: true },
     });
 
     // 2) Cancel them at Stripe
     await Promise.all(activeSubs.map(s =>
       stripe.subscriptions.del(s.stripeSubscriptionId!)
     ));
+
+    // 2.5) Delete the Stripe Customer (and all attached payment methods)
+    const userRecord = await prisma.user.findUnique({ where: { id: userId } });
+    if (userRecord?.stripeCustomerId) {
+      try {
+        await stripe.customers.del(userRecord.stripeCustomerId);
+        console.log(`Deleted Stripe customer ${userRecord.stripeCustomerId}`);
+      } catch (stripeErr) {
+        console.error('Failed to delete Stripe customer:', stripeErr);
+        // proceed with account deletion anyway
+      }
+    }
 
     // 3) Delete all user-related data in a single transaction
     const sessions = await prisma.chatSession.findMany({
@@ -216,7 +245,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
       prisma.notification.deleteMany({ where: { userId } }),
       prisma.subscription.deleteMany({ where: { userId } }),
       prisma.oAuthAccount.deleteMany({ where: { userId } }),
-      prisma.user.delete({ where: { id: userId } })
+      prisma.user.delete({ where: { id: userId } }),
     ]);
 
     clearAuthCookies(res);

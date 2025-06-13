@@ -1,9 +1,10 @@
-// server.js
+// backend/server.js
 import 'dotenv/config';
 import './lib/passport.js';
 import express from 'express';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
+import csurf from 'csurf';
 import passport from 'passport';
 import rateLimit from 'express-rate-limit';
 
@@ -66,13 +67,16 @@ app.use(express.json());
 // 6) Passport init
 app.use(passport.initialize());
 
-// 7) Public auth
-app.use('/api/auth', authRoute);
+// 7) CSRF protection for auth routes (tokens stored in cookie)
+const csrfProtection = csurf({ cookie: true });
 
-// 8) Protected payments
+// 8) Public auth, now with CSRF
+app.use('/api/auth', csrfProtection, authRoute);
+
+// 9) Protected payments
 app.use('/api/payments', requireAuth, paymentsRouter);
 
-// 9) Other protected
+// 10) Other protected
 app.use('/api/users', requireAuth, usersRoute);
 app.use('/api/cards', requireAuth, cardsRoute);
 app.use('/api/notifications', requireAuth, notificationsRoute);
@@ -86,17 +90,20 @@ const chatLimiter = rateLimit({
 app.use('/api/chat', requireAuth, chatLimiter, aiChatRoute);
 app.use('/api/chats', requireAuth, sessionsRoute);
 
-// 10) Health-check
+// 11) Health-check
 app.get('/api/ping', (_q, r) => r.json({ ok: true }));
 app.get('/', (_q, r) => r.send('🚀 DentGo Backend is live!'));
 
-// 11) Global error handler
+// 12) Global error handler
 app.use((err, _req, res, next) => {
   console.error('Unhandled error:', err);
+  if (err.code === 'EBADCSRFTOKEN') {
+    // CSRF token errors
+    return res.status(403).json({ error: 'Invalid CSRF token' });
+  }
   if (err.message?.startsWith('CORS:')) {
     return res.status(403).json({ error: err.message });
   }
-  // delegate to any remaining error handlers (or default Express one)
   return next(err);
 });
 

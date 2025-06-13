@@ -253,21 +253,27 @@ router.post('/cancel-subscription', async (req, res, next) => {
       return res.status(404).json({ error: 'Subscription not found' });
     }
 
-    // Cancel in Stripe
-    const canceled = await stripe.subscriptions.del(subscriptionId);
+    // Schedule cancel at period end in Stripe
+    const updatedStripeSub = await stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: true,
+    });
 
     // Mirror in DB
     await prisma.subscription.update({
       where: { id: sub.id },
       data: {
-        status: canceled.status.toUpperCase(),
-        cancelsAt: canceled.cancel_at
-          ? new Date(canceled.cancel_at * 1000)
-          : null,
+        status: updatedStripeSub.status.toUpperCase(),
+        cancelsAt: updatedStripeSub.cancel_at
+          ? new Date(updatedStripeSub.cancel_at * 1000)
+          : sub.cancelsAt,
       },
     });
 
-    res.json({ success: true, status: canceled.status.toLowerCase() });
+    res.json({
+      success: true,
+      status: updatedStripeSub.status.toLowerCase(),
+      cancelAt: updatedStripeSub.cancel_at, // UNIX timestamp for period end
+    });
   } catch (err) {
     next(err);
   }
