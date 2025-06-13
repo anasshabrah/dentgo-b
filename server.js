@@ -1,4 +1,4 @@
-// \backend\server.js
+// backend/server.js
 
 import 'dotenv/config';
 import './lib/passport.js';
@@ -11,6 +11,17 @@ import rateLimit from 'express-rate-limit';
 
 import { corsConfig } from './middleware/corsConfig.js';
 import requireAuth from './middleware/requireAuth.js';
+import authRoute from './controllers/auth.js';
+import usersRoute from './controllers/users.js';
+import cardsRoute from './controllers/cards.js';
+import notificationsRoute from './controllers/notifications.js';
+import subscriptionsRoute from './controllers/subscriptions.js';
+import aiChatRoute from './controllers/chat.js';
+import sessionsRoute from './controllers/chats.js';
+import { webhookHandler, paymentsRouter } from './controllers/payments.js';
+
+const app = express();
+app.set('trust proxy', 1);
 
 // sanity‐check critical env
 [
@@ -34,18 +45,6 @@ import requireAuth from './middleware/requireAuth.js';
   }
 });
 
-import authRoute from './controllers/auth.js';
-import usersRoute from './controllers/users.js';
-import cardsRoute from './controllers/cards.js';
-import notificationsRoute from './controllers/notifications.js';
-import subscriptionsRoute from './controllers/subscriptions.js';
-import aiChatRoute from './controllers/chat.js';
-import sessionsRoute from './controllers/chats.js';
-import { webhookHandler, paymentsRouter } from './controllers/payments.js';
-
-const app = express();
-app.set('trust proxy', 1);
-
 // 1) Logging
 app.use(morgan('dev'));
 
@@ -58,7 +57,9 @@ app.use(corsConfig);
 // 4) Stripe Webhook (raw) BEFORE express.json()
 app.post(
   '/api/payments/webhook',
-  express.raw({ type: 'application/json' }),
+  // Accept *every* incoming body as raw buffer, so Stripe’s signature
+  // check always sees the exact bytes it signed.
+  express.raw({ type: '*/*' }),
   webhookHandler
 );
 
@@ -68,7 +69,7 @@ app.use(express.json());
 // 6) Passport init
 app.use(passport.initialize());
 
-// 7) CSRF protection for auth routes (using double-submit cookie with strict SameSite)
+// 7) CSRF protection for auth routes
 const csrfProtection = csurf({
   cookie: {
     httpOnly: true,
@@ -77,14 +78,11 @@ const csrfProtection = csurf({
   }
 });
 
-// 8) Public auth—only apply CSRF to browser‐driven routes, skip on /refresh
+// 8) Public auth—skip CSRF for /refresh
 app.use(
   '/api/auth',
   (req, res, next) => {
-    // our refresh token rotation happens via a silent fetch, so skip CSRF there
-    if (req.path === '/refresh' && req.method === 'POST') {
-      return next();
-    }
+    if (req.path === '/refresh' && req.method === 'POST') return next();
     return csrfProtection(req, res, next);
   },
   authRoute
@@ -99,6 +97,7 @@ app.use('/api/cards', requireAuth, cardsRoute);
 app.use('/api/notifications', requireAuth, notificationsRoute);
 app.use('/api/subscriptions', requireAuth, subscriptionsRoute);
 
+// 11) Chat & sessions
 const chatLimiter = rateLimit({
   windowMs: 60_000,
   max: 20,
@@ -107,15 +106,14 @@ const chatLimiter = rateLimit({
 app.use('/api/chat', requireAuth, chatLimiter, aiChatRoute);
 app.use('/api/chats', requireAuth, sessionsRoute);
 
-// 11) Health-check
+// 12) Health-check
 app.get('/api/ping', (_q, r) => r.json({ ok: true }));
 app.get('/', (_q, r) => r.send('🚀 DentGo Backend is live!'));
 
-// 12) Global error handler
+// 13) Global error handler
 app.use((err, _req, res, next) => {
   console.error('Unhandled error:', err);
   if (err.code === 'EBADCSRFTOKEN') {
-    // CSRF token errors
     return res.status(403).json({ error: 'Invalid CSRF token' });
   }
   if (err.message?.startsWith('CORS:')) {
