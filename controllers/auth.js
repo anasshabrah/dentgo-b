@@ -20,6 +20,11 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;
 const REFRESH_TTL = +process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60;
 
+// ───────── Email Normalization ─────────
+function normalizeEmail(email) {
+  return typeof email === 'string' ? email.toLowerCase().trim() : email;
+}
+
 // ───────── JWT Helpers ─────────
 function signAccess(user) {
   return jwt.sign(
@@ -79,7 +84,8 @@ router.post('/google', async (req, res) => {
       idToken: credential,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
-    const { sub: providerUserId, email, name, picture } = ticket.getPayload();
+    const { sub: providerUserId, email: rawEmail, name, picture } = ticket.getPayload();
+    const email = normalizeEmail(rawEmail);
 
     const user = await prisma.user.upsert({
       where: { email },
@@ -111,7 +117,8 @@ router.post(
   passport.authenticate('apple', { session: false, failureRedirect: '/LetsYouIn' }),
   async (req, res) => {
     try {
-      const { providerUserId, email, name } = req.user;
+      const { providerUserId, email: rawEmail, name } = req.user;
+      const email = normalizeEmail(rawEmail);
       const user = await prisma.user.upsert({
         where: { email },
         update: { name },
