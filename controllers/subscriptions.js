@@ -1,4 +1,4 @@
-// File: backend/controllers/subscriptions.js
+// backend/controllers/subscriptions.js
 import express from 'express';
 import prisma from '../lib/prismaClient.js';
 
@@ -29,6 +29,7 @@ router.get('/', async (req, res) => {
         status: 'free',
         currentPeriodEnd: null,
         plan: 'FREE',
+        cancelAt: null,
       });
     }
 
@@ -40,6 +41,10 @@ router.get('/', async (req, res) => {
         ? Math.floor(sub.renewsAt.getTime() / 1000)
         : null,
       plan: sub.plan, // e.g. "PLUS" or "PRO"
+      // Add cancelAt so the frontend can render the scheduled-cancel date
+      cancelAt: sub.cancelsAt
+        ? Math.floor(sub.cancelsAt.getTime() / 1000)
+        : null,
     });
   } catch (err) {
     console.error('GET /api/subscriptions error:', err);
