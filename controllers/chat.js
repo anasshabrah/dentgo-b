@@ -1,184 +1,80 @@
-// File: controllers/chat.js
+// controllers/chat.js
 import express from 'express';
-import { OpenAI } from 'openai';
+
 import prisma from '../lib/prismaClient.js';
+import { openai } from '../lib/config.js';
+import requireAuth from '../middleware/requireAuth.js';
 
 const router = express.Router();
+router.use(requireAuth);
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const SYSTEM_CHECK =
-  'Only answer YES or NO. Is this conversation about clinical dentistry, dental biomaterials, or dental procedures? ' +
-  'Consider the entire chat history, not just the last message.';
+const GATE_SYSTEM =
+  'Only answer YES or NO. Is this conversation about clinical dentistry, dental biomaterials, or dental procedures?';
 
+const ASSIST_SYSTEM =
+  'You are DentAssist AI – a professional dental assistant. Format replies with clear headings, bullet points, and add a "🔍 References" section when appropriate.';
+
+// POST /api/chat
 router.post('/', async (req, res) => {
-  try {
-    const { prompt, history = [], sessionId, title } = req.body;
+  const { prompt, history = [], sessionId, title } = req.body;
+  if (!prompt) return res.status(400).json({ error: 'Missing prompt' });
 
-    if (!prompt || typeof prompt !== 'string') {
-      return res.status(400).json({ error: 'Missing or invalid prompt' });
-    }
+  let session = sessionId
+    ? await prisma.chatSession.findUnique({ where: { id: sessionId } })
+    : await prisma.chatSession.create({ data: { userId: req.user.id, title: title || null } });
+  if (!session) return res.status(404).json({ error: 'Session not found' });
 
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  await prisma.message.create({ data: { chatId: session.id, role: 'USER', content: prompt } });
 
-    let session;
-    if (sessionId) {
-      session = await prisma.chatSession.findUnique({ where: { id: sessionId } });
-      if (!session) {
-        return res.status(404).json({ error: 'Chat session not found' });
-      }
-    } else {
-      session = await prisma.chatSession.create({
-        data: {
-          userId,
-          title: title || `Session ${new Date().toLocaleString()}`,
-        },
-      });
-    }
-
-    await prisma.message.create({
-      data: {
-        chatId: session.id,
-        role: 'USER',
-        content: prompt,
-      },
-    });
-
-    const gateMessages = [
-      { role: 'system', content: SYSTEM_CHECK },
-      ...history.map(({ role, text }) => ({ role, content: text })),
-      { role: 'user', content: prompt },
-    ];
-
-    const gateResp = await openai.chat.completions.create({
-      model: process.env.GPT_MODEL || 'gpt-4o',
-      messages: gateMessages,
-    });
-
-    const gateText = gateResp.choices?.[0]?.message?.content?.trim().toLowerCase() || '';
-    const isDental = gateText.startsWith('yes');
-
-    if (!isDental) {
-      const refusal =
-        'I’m sorry, but DentAssist AI can only answer questions about clinical dentistry, dental biomaterials, or dental procedures.';
-      await prisma.message.create({
-        data: {
-          chatId: session.id,
-          role: 'BOT',
-          content: refusal,
-        },
-      });
-      return res.json({
-        sessionId: session.id,
-        answer: refusal,
-        modelUsed: null,
-        dental: false,
-      });
-    }
-
-    const targetModel = process.env.GPT_MODEL;
-    if (!targetModel) {
-      console.error('❌ GPT_MODEL missing from .env');
-      return res.status(500).json({ error: 'Server misconfiguration' });
-    }
-
-    const chatMessages = [
-      {
-        role: 'system',
-        content:
-          'You are DentAssist AI – a professional dental assistant. Format replies with clear headings, bullet points, ' +
-          "and add a '🔍 References' section when appropriate.",
-      },
-      ...history.map(({ role, text }) => ({ role, content: text })),
-      { role: 'user', content: prompt },
-    ];
-
-    const answerResp = await openai.chat.completions.create({
-      model: targetModel,
-      messages: chatMessages,
-    });
-
-    const answer = answerResp.choices?.[0]?.message?.content?.trim();
-    if (!answer) throw new Error('No response from AI');
-
-    await prisma.message.create({
-      data: {
-        chatId: session.id,
-        role: 'BOT',
-        content: answer,
-      },
-    });
-
-    res.json({
-      sessionId: session.id,
-      answer,
-      modelUsed: targetModel,
-      dental: true,
-    });
-  } catch (err) {
-    console.error('💥 Chat route error:', err);
-    res.status(500).json({ error: 'AI service failed' });
+  // gating
+  const gate = await openai.chat.completions.create({
+    model: process.env.GPT_MODEL,
+    messages: [{ role: 'system', content: GATE_SYSTEM }, ...history.map(h => ({ role: h.role, content: h.text })), { role: 'user', content: prompt }]
+  });
+  const ok = gate.choices[0].message.content.trim().toLowerCase().startsWith('yes');
+  if (!ok) {
+    const refusal = 'I’m sorry… only dental topics.';
+    await prisma.message.create({ data: { chatId: session.id, role: 'BOT', content: refusal } });
+    return res.json({ sessionId: session.id, answer: refusal, modelUsed: null, dental: false });
   }
+
+  // actual answer
+  const answerResp = await openai.chat.completions.create({
+    model: process.env.GPT_MODEL,
+    messages: [{ role: 'system', content: ASSIST_SYSTEM }, ...history.map(h => ({ role: h.role, content: h.text })), { role: 'user', content: prompt }]
+  });
+  const answer = answerResp.choices[0].message.content.trim();
+  await prisma.message.create({ data: { chatId: session.id, role: 'BOT', content: answer } });
+
+  res.json({ sessionId: session.id, answer, modelUsed: process.env.GPT_MODEL, dental: true });
 });
 
-// GET /count?date=YYYY-MM-DD — returns number of messages by the user on that day
+// GET /api/chat/count?date=YYYY-MM-DD
 router.get('/count', async (req, res) => {
-  try {
-    const { date } = req.query;
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+  const date = req.query.date;
+  if (!date) return res.status(400).json({ error: 'Missing date' });
 
-    if (!date) return res.status(400).json({ error: 'Missing date parameter' });
-
-    const start = new Date(`${date}T00:00:00Z`);
-    const end = new Date(`${date}T23:59:59.999Z`);
-
-    const count = await prisma.message.count({
-      where: {
-        role: 'USER',
-        createdAt: { gte: start, lte: end },
-        chat: { userId },
-      },
-    });
-
-    res.json({ date, count });
-  } catch (err) {
-    console.error('💥 /chat/count error:', err);
-    res.status(500).json({ error: 'Failed to count messages' });
-  }
+  const start = new Date(`${date}T00:00:00Z`);
+  const end = new Date(`${date}T23:59:59.999Z`);
+  const count = await prisma.message.count({
+    where: { role: 'USER', createdAt: { gte: start, lte: end }, chat: { userId: req.user.id } }
+  });
+  res.json({ date, count });
 });
 
-// ✅ NEW: POST /end — mark chat as ended
+// POST /api/chat/end
 router.post('/end', async (req, res) => {
-  try {
-    const { sessionId } = req.body;
-    const userId = req.user?.id;
+  const { sessionId } = req.body;
+  if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
 
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-    if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' });
+  const session = await prisma.chatSession.findUnique({ where: { id: sessionId } });
+  if (!session || session.userId !== req.user.id) return res.status(404).json({ error: 'Not found' });
 
-    const session = await prisma.chatSession.findUnique({
-      where: { id: sessionId },
-      include: { user: true },
-    });
-
-    if (!session) return res.status(404).json({ error: 'Chat session not found' });
-    if (session.userId !== userId) return res.status(403).json({ error: 'Forbidden' });
-
-    await prisma.chatSession.update({
-      where: { id: sessionId },
-      data: {
-        endedAt: new Date(),
-        isEnded: true,
-        isActive: false,
-      },
-    });
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error('💥 /chat/end error:', err);
-    res.status(500).json({ error: 'Failed to end chat session' });
-  }
+  await prisma.chatSession.update({
+    where: { id: sessionId },
+    data: { endedAt: new Date(), isEnded: true, isActive: false },
+  });
+  res.json({ success: true });
 });
 
 export default router;

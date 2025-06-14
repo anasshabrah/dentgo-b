@@ -1,120 +1,44 @@
-// backend/controllers/auth.js
-
+// controllers/auth.js
 import express from 'express';
-import jwt from 'jsonwebtoken';
-import bcrypt from 'bcrypt';
 import passport from 'passport';
 import rateLimit from 'express-rate-limit';
-import { OAuth2Client } from 'google-auth-library';
-import { v4 as uuid } from 'uuid';
-import Stripe from 'stripe';
-import csurf from '@dr.pogodin/csurf';
 
 import prisma from '../lib/prismaClient.js';
+import { googleClient, stripe } from '../lib/config.js';
+import { normalizeEmail } from '../lib/normalize.js';
+import { signAccess, issueRefresh, setAuthCookies, clearAuthCookies, csrf } from '../lib/auth.js';
 import requireAuth from '../middleware/requireAuth.js';
-import { authCookieOpts, clearCookieOpts } from '../middleware/cookieConfig.js';
 
 const router = express.Router();
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: process.env.STRIPE_API_VERSION,
-});
-
-const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;
-const REFRESH_TTL = +process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60;
-
-const authLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 10,
-  message: { error: 'Too many auth attempts – please slow down.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+const authLimiter = rateLimit({ windowMs: 60_000, max: 10, message: { error: 'Too many auth attempts' }, standardHeaders: true, legacyHeaders: false });
 router.use(authLimiter);
 
-function normalizeEmail(email) {
-  return typeof email === 'string' ? email.toLowerCase().trim() : email;
-}
-
-function signAccess(user) {
-  return jwt.sign(
-    { id: user.id, email: user.email, role: user.role },
-    process.env.JWT_SECRET,
-    { expiresIn: ACCESS_TTL }
-  );
-}
-
-async function issueRefresh(user) {
-  const raw = uuid();
-  const hash = await bcrypt.hash(raw, 10);
-  await prisma.refreshToken.create({
-    data: {
-      tokenHash: hash,
-      userId: user.id,
-      expiresAt: new Date(Date.now() + REFRESH_TTL * 1000),
-    },
-  });
-  return raw;
-}
-
-function setAuthCookies(res, access, refresh) {
-  const opts = authCookieOpts();
-  res.cookie('accessToken', access, { ...opts, maxAge: ACCESS_TTL * 1000 });
-  res.cookie('refreshToken', refresh, { ...opts, maxAge: REFRESH_TTL * 1000 });
-}
-
-function clearAuthCookies(res) {
-  const opts = clearCookieOpts();
-  res.clearCookie('accessToken', opts);
-  res.clearCookie('refreshToken', opts);
-}
-
-const csrfProtection = csurf({
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-  }
-});
-
-// 1) Expose CSRF token for client to fetch
-router.get('/csrf-token', csrfProtection, (req, res) => {
+// 1) CSRF token endpoint
+router.get('/csrf-token', csrf, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
-// 2) Google OAuth handlers
+// 2) Google OAuth
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 router.get(
   '/google/callback',
-  csrfProtection,
-  (req, res, next) => {
-    passport.authenticate(
-      'google',
-      { session: false, failureRedirect: '/LetsYouIn' },
-      async (err, user) => {
-        if (err) return next(err);
-        if (!user) return res.redirect('/LetsYouIn');
-        try {
-          const access = signAccess(user);
-          const refresh = await issueRefresh(user);
-          setAuthCookies(res, access, refresh);
-          res.redirect(process.env.FRONTEND_ORIGIN);
-        } catch (e) {
-          next(e);
-        }
-      }
-    )(req, res, next);
-  }
+  csrf,
+  (req, res, next) =>
+    passport.authenticate('google', { session: false, failureRedirect: '/LetsYouIn' }, async (err, user) => {
+      if (err) return next(err);
+      const access = signAccess(user);
+      const refresh = await issueRefresh(user);
+      setAuthCookies(res, access, refresh);
+      res.redirect(process.env.FRONTEND_ORIGIN);
+    })(req, res, next)
 );
 
-router.post('/google', csrfProtection, async (req, res) => {
+router.post('/google', csrf, async (req, res) => {
   const { credential } = req.body;
   if (!credential) return res.status(400).json({ error: 'Missing credential' });
+
   try {
-    const ticket = await googleClient.verifyIdToken({
-      idToken: credential,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: process.env.GOOGLE_CLIENT_ID });
     const { sub: providerUserId, email: rawEmail, name, picture } = ticket.getPayload();
     const email = normalizeEmail(rawEmail);
 
@@ -134,158 +58,98 @@ router.post('/google', csrfProtection, async (req, res) => {
     setAuthCookies(res, access, refresh);
     res.json({ user });
   } catch (err) {
-    console.error('Google One-Tap error:', err);
+    console.error(err);
     res.status(401).json({ error: 'Authentication failed' });
   }
 });
 
-// 3) Apple OAuth handlers
+// 3) Apple OAuth
 router.get('/apple', passport.authenticate('apple'));
 router.post(
   '/apple/callback',
-  csrfProtection,
-  (req, res, next) => {
-    passport.authenticate(
-      'apple',
-      { session: false, failureRedirect: '/LetsYouIn' },
-      async (err, user) => {
-        if (err) return next(err);
-        if (!user) return res.redirect('/LetsYouIn');
-        try {
-          const { providerUserId, email: rawEmail, name } = user;
-          const email = normalizeEmail(rawEmail);
-          const upserted = await prisma.user.upsert({
-            where: { email },
-            update: { name },
-            create: { name, email, picture: null },
-          });
-          await prisma.oAuthAccount.upsert({
-            where: { provider_providerUserId: { provider: 'apple', providerUserId } },
-            update: {},
-            create: { provider: 'apple', providerUserId, userId: upserted.id },
-          });
+  csrf,
+  (req, res, next) =>
+    passport.authenticate('apple', { session: false, failureRedirect: '/LetsYouIn' }, async (err, profileUser) => {
+      if (err) return next(err);
+      const { providerUserId, email: rawEmail, name } = profileUser;
+      const email = normalizeEmail(rawEmail);
 
-          const access = signAccess(upserted);
-          const refresh = await issueRefresh(upserted);
-          setAuthCookies(res, access, refresh);
-          res.json({ user: upserted });
-        } catch (e) {
-          next(e);
-        }
-      }
-    )(req, res, next);
-  }
+      const user = await prisma.user.upsert({
+        where: { email },
+        update: { name },
+        create: { name, email, picture: null },
+      });
+      await prisma.oAuthAccount.upsert({
+        where: { provider_providerUserId: { provider: 'apple', providerUserId } },
+        update: {},
+        create: { provider: 'apple', providerUserId, userId: user.id },
+      });
+
+      const access = signAccess(user);
+      const refresh = await issueRefresh(user);
+      setAuthCookies(res, access, refresh);
+      res.json({ user });
+    })(req, res, next)
 );
 
-// 4) Refresh endpoint now protected by CSRF + logging/invalidation
-router.post('/refresh', csrfProtection, async (req, res) => {
+// 4) Refresh tokens
+router.post('/refresh', csrf, async (req, res) => {
   const token = req.cookies.refreshToken;
-  console.log('🔄 /refresh invoked, token from cookie:', token);
+  if (!token) return res.status(401).json({ error: 'No refresh token' });
 
-  if (!token) {
-    console.warn('↩️  No refresh token provided');
-    return res.status(401).json({ error: 'No refresh token provided' });
-  }
+  const records = await prisma.refreshToken.findMany({ where: { expiresAt: { gt: new Date() } }, include: { user: true } });
+  const match = await Promise.all(records.map(r => bcrypt.compare(token, r.tokenHash) ? r : null)).then(arr => arr.find(x => x));
+  if (!match) return res.status(401).json({ error: 'Invalid refresh token' });
 
-  const records = await prisma.refreshToken.findMany({
-    where: { expiresAt: { gt: new Date() } },
-    include: { user: true },
-  });
-  console.log(`📚 Found ${records.length} non-expired refresh records`);
-
-  let match = null;
-  for (const r of records) {
-    if (await bcrypt.compare(token, r.tokenHash)) {
-      match = r;
-      break;
-    }
-  }
-
-  if (!match) {
-    console.warn('❌ No matching refresh token record');
-    return res.status(401).json({ error: 'Invalid refresh token' });
-  }
-
-  console.log(
-    `✅ Refresh token matched record ID ${match.id} for user ${match.user.email}`
-  );
-
-  // revoke old, issue new
   await prisma.refreshToken.delete({ where: { id: match.id } });
-  const newRaw = await issueRefresh(match.user);
-  const newAccess = signAccess(match.user);
+  const user = match.user;
+  const newRaw = await issueRefresh(user);
+  const newAccess = signAccess(user);
   setAuthCookies(res, newAccess, newRaw);
-
-  res.json({ user: match.user });
+  res.json({ user });
 });
 
 // 5) Logout
-router.post('/logout', csrfProtection, async (req, res) => {
-  try {
-    if (req.user?.id) {
-      await prisma.refreshToken.deleteMany({ where: { userId: req.user.id } });
-    }
-  } catch (err) {
-    console.error('Logout cleanup error:', err);
-  }
+router.post('/logout', csrf, requireAuth, async (req, res) => {
+  await prisma.refreshToken.deleteMany({ where: { userId: req.user.id } });
   clearAuthCookies(res);
   res.status(204).end();
 });
 
 // 6) Delete account
 router.delete('/delete', requireAuth, async (req, res) => {
-  const userId = req.user.id;
+  const uid = req.user.id;
   try {
-    console.log(`Deleting account for user ID: ${userId}`);
+    // cancel Stripe subs
+    const subs = await prisma.subscription.findMany({ where: { userId: uid, status: 'ACTIVE', stripeSubscriptionId: { not: null } }, select: { stripeSubscriptionId: true } });
+    await Promise.all(subs.map(s => stripe.subscriptions.del(s.stripeSubscriptionId).catch(() => null)));
 
-    // cancel subscriptions, detach payment methods, delete customer...
-    const activeSubs = await prisma.subscription.findMany({
-      where: { userId, stripeSubscriptionId: { not: null }, status: 'ACTIVE' },
-      select: { stripeSubscriptionId: true },
-    });
-    await Promise.all(
-      activeSubs.map(async ({ stripeSubscriptionId }) => {
-        try {
-          await stripe.subscriptions.del(stripeSubscriptionId);
-        } catch (err) {
-          console.warn(`⚠️ Could not delete Stripe subscription ${stripeSubscriptionId}:`, err.message || err);
-        }
-      })
-    );
-
-    const userRecord = await prisma.user.findUnique({ where: { id: userId } });
-    if (userRecord?.stripeCustomerId) {
-      const { data: methods } = await stripe.paymentMethods.list({
-        customer: userRecord.stripeCustomerId,
-        type: 'card',
-      });
+    // delete customer & PMs
+    const u = await prisma.user.findUnique({ where: { id: uid } });
+    if (u.stripeCustomerId) {
+      const { data: methods } = await stripe.paymentMethods.list({ customer: u.stripeCustomerId, type: 'card' });
       await Promise.all(methods.map(pm => stripe.paymentMethods.detach(pm.id)));
-      await stripe.customers.del(userRecord.stripeCustomerId);
-      console.log(`Deleted Stripe customer ${userRecord.stripeCustomerId}`);
+      await stripe.customers.del(u.stripeCustomerId);
     }
 
-    const sessions = await prisma.chatSession.findMany({
-      where: { userId },
-      select: { id: true },
-    });
+    // cascade delete all user data
+    const sessions = await prisma.chatSession.findMany({ where: { userId: uid }, select: { id: true } });
     const chatIds = sessions.map(s => s.id);
-
     await prisma.$transaction([
       prisma.message.deleteMany({ where: { chatId: { in: chatIds } } }),
-      prisma.chatSession.deleteMany({ where: { userId } }),
-      prisma.refreshToken.deleteMany({ where: { userId } }),
-      prisma.card.deleteMany({ where: { userId } }),
-      prisma.notification.deleteMany({ where: { userId } }),
-      prisma.subscription.deleteMany({ where: { userId } }),
-      prisma.oAuthAccount.deleteMany({ where: { userId } }),
-      prisma.user.delete({ where: { id: userId } }),
+      prisma.chatSession.deleteMany({ where: { userId: uid } }),
+      prisma.refreshToken.deleteMany({ where: { userId: uid } }),
+      prisma.card.deleteMany({ where: { userId: uid } }),
+      prisma.notification.deleteMany({ where: { userId: uid } }),
+      prisma.subscription.deleteMany({ where: { userId: uid } }),
+      prisma.oAuthAccount.deleteMany({ where: { userId: uid } }),
+      prisma.user.delete({ where: { id: uid } }),
     ]);
 
     clearAuthCookies(res);
-    console.log(`✅ Successfully deleted account for user ID: ${userId}`);
     res.status(204).end();
   } catch (err) {
-    console.error('❌ Delete account error:', err);
+    console.error(err);
     res.status(500).json({ error: 'Failed to delete account' });
   }
 });

@@ -1,329 +1,151 @@
-// backend/controllers/payments.js
-
+// controllers/payments.js
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
-import Stripe from 'stripe';
+
+import prisma from '../lib/prismaClient.js';
+import { stripe } from '../lib/config.js';
+import { ensureCustomer } from '../lib/stripeHelpers.js';
 import requireAuth from '../middleware/requireAuth.js';
 
-const prisma = new PrismaClient();
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: process.env.STRIPE_API_VERSION,
+export const paymentsRouter = express.Router();
+paymentsRouter.use(requireAuth);
+
+// CREATE customer
+paymentsRouter.post('/create-customer', async (req, res, next) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const cid = user.stripeCustomerId || await ensureCustomer(user);
+    res.json({ customerId: cid });
+  } catch (err) { next(err); }
 });
 
-const router = express.Router();
-// All routes except webhook require a parsed JSON + auth
-router.use(requireAuth);
-
-/**
- * POST /api/payments/create-customer
- */
-router.post('/create-customer', async (req, res, next) => {
+// CREATE setup intent
+paymentsRouter.post('/create-setup-intent', async (req, res, next) => {
   try {
-    const userId = req.user.id;
-    const existing = await prisma.user.findUnique({ where: { id: userId } });
-    if (!existing) return res.status(404).json({ error: 'User not found' });
-    if (existing.stripeCustomerId) {
-      return res.json({ customerId: existing.stripeCustomerId });
-    }
-
-    const customer = await stripe.customers.create({
-      email: existing.email,
-      name: existing.name,
-    });
-
-    await prisma.user.update({
-      where: { id: userId },
-      data: { stripeCustomerId: customer.id },
-    });
-
-    res.json({ customerId: customer.id });
-  } catch (err) {
-    next(err);
-  }
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const cid = user.stripeCustomerId || await ensureCustomer(user);
+    const si = await stripe.setupIntents.create({ customer: cid, usage: 'off_session' });
+    res.json({ clientSecret: si.client_secret });
+  } catch (err) { next(err); }
 });
 
-/**
- * POST /api/payments/create-setup-intent
- */
-router.post('/create-setup-intent', async (req, res, next) => {
+// CREATE payment intent
+paymentsRouter.post('/create-payment-intent', async (req, res, next) => {
   try {
-    const userId = req.user.id;
-    const userRecord = await prisma.user.findUnique({ where: { id: userId } });
-    if (!userRecord) return res.status(404).json({ error: 'User not found' });
-
-    let customerId = userRecord.stripeCustomerId;
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: userRecord.email,
-        name: userRecord.name,
-      });
-      customerId = customer.id;
-      await prisma.user.update({
-        where: { id: userId },
-        data: { stripeCustomerId: customerId },
-      });
-    }
-
-    const setupIntent = await stripe.setupIntents.create({
-      customer: customerId,
-      usage: 'off_session',
-    });
-
-    res.json({ clientSecret: setupIntent.client_secret });
-  } catch (err) {
-    next(err);
-  }
-});
-
-/**
- * POST /api/payments/create-payment-intent
- */
-router.post('/create-payment-intent', async (req, res, next) => {
-  try {
-    const userId = req.user.id;
     const { amount, currency } = req.body;
-    if (typeof amount !== 'number' || !currency) {
-      return res.status(400).json({ error: 'Missing amount or currency' });
-    }
-
-    const userRecord = await prisma.user.findUnique({ where: { id: userId } });
-    if (!userRecord) return res.status(404).json({ error: 'User not found' });
-
-    let customerId = userRecord.stripeCustomerId;
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: userRecord.email,
-        name: userRecord.name,
-      });
-      customerId = customer.id;
-      await prisma.user.update({
-        where: { id: userId },
-        data: { stripeCustomerId: customerId },
-      });
-    }
-
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount,
-      currency,
-      customer: customerId,
-      automatic_payment_methods: { enabled: true },
-    });
-
-    res.json({ clientSecret: paymentIntent.client_secret });
-  } catch (err) {
-    next(err);
-  }
+    if (typeof amount !== 'number' || !currency) return res.status(400).json({ error: 'Missing amount or currency' });
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const cid = user.stripeCustomerId || await ensureCustomer(user);
+    const pi = await stripe.paymentIntents.create({ amount, currency, customer: cid, automatic_payment_methods: { enabled: true } });
+    res.json({ clientSecret: pi.client_secret });
+  } catch (err) { next(err); }
 });
 
-/**
- * POST /api/payments/create-subscription
- */
-router.post('/create-subscription', async (req, res, next) => {
+// CREATE subscription
+paymentsRouter.post('/create-subscription', async (req, res, next) => {
   try {
-    const userId = req.user.id;
-    const { priceId: frontendPriceId, paymentMethodId } = req.body || {};
+    const { priceId = 'FREE', paymentMethodId } = req.body;
+    const uid = req.user.id;
 
-    // map FREE/PLUS
-    const selectedPriceId = frontendPriceId || 'FREE';
-
-    // ─── FREE plan ───
-    if (selectedPriceId === 'FREE') {
-      const existing = await prisma.subscription.findFirst({
-        where: { userId, plan: 'FREE', status: 'ACTIVE' },
-      });
+    if (priceId === 'FREE') {
+      const existing = await prisma.subscription.findFirst({ where: { userId: uid, plan: 'FREE', status: 'ACTIVE' } });
       if (existing) {
         return res.json({
           subscriptionId: existing.stripeSubscriptionId,
           status: existing.status.toLowerCase(),
-          currentPeriodEnd: existing.renewsAt
-            ? Math.floor(existing.renewsAt.getTime() / 1000)
-            : null,
-          plan: 'FREE',
+          currentPeriodEnd: existing.renewsAt ? Math.floor(existing.renewsAt.getTime()/1000) : null,
+          plan: 'FREE'
         });
       }
-      const now = new Date();
-      const freeSub = await prisma.subscription.create({
-        data: {
-          userId,
-          plan: 'FREE',
-          status: 'ACTIVE',
-          beganAt: now,
-          renewsAt: null,
-          stripeSubscriptionId: null,
-          stripePriceId: null,
-        },
-      });
+      const free = await prisma.subscription.create({ data: { userId: uid, plan: 'FREE', status: 'ACTIVE', beganAt: new Date(), renewsAt: null } });
+      return res.json({ subscriptionId: null, status: 'free', currentPeriodEnd: null, plan: 'FREE' });
+    }
+
+    // PLUS / paid plan
+    const hasPlus = await prisma.subscription.findFirst({ where: { userId: uid, plan: priceId, status: 'ACTIVE' } });
+    if (hasPlus) {
       return res.json({
-        subscriptionId: freeSub.stripeSubscriptionId,
-        status: 'active',
-        currentPeriodEnd: null,
-        plan: 'FREE',
+        subscriptionId: hasPlus.stripeSubscriptionId,
+        status: hasPlus.status.toLowerCase(),
+        currentPeriodEnd: hasPlus.renewsAt ? Math.floor(hasPlus.renewsAt.getTime()/1000) : null,
+        plan: priceId
       });
     }
 
-    // ─── PLUS plan ───
-    // 1) Prevent duplicate PLUS subscriptions
-    const existingPlus = await prisma.subscription.findFirst({
-      where: { userId, plan: 'PLUS', status: 'ACTIVE' },
-    });
-    if (existingPlus) {
-      return res.json({
-        subscriptionId: existingPlus.stripeSubscriptionId,
-        status: existingPlus.status.toLowerCase(),
-        currentPeriodEnd: existingPlus.renewsAt
-          ? Math.floor(existingPlus.renewsAt.getTime() / 1000)
-          : null,
-        plan: 'PLUS',
-      });
-    }
+    if (!paymentMethodId) return res.status(400).json({ error: 'Missing paymentMethodId' });
+    const user = await prisma.user.findUnique({ where: { id: uid } });
+    const cid = user.stripeCustomerId;
+    await stripe.paymentMethods.attach(paymentMethodId, { customer: cid });
+    await stripe.customers.update(cid, { invoice_settings: { default_payment_method: paymentMethodId } });
 
-    // 2) Need a payment method
-    if (!paymentMethodId) {
-      return res
-        .status(400)
-        .json({ error: 'Missing paymentMethodId for PLUS plan' });
-    }
-
-    // 3) Attach & set default PM
-    const userRecord = await prisma.user.findUnique({ where: { id: userId } });
-    if (!userRecord?.stripeCustomerId) {
-      return res
-        .status(400)
-        .json({ error: 'Stripe customer not found for user' });
-    }
-    await stripe.paymentMethods.attach(paymentMethodId, {
-      customer: userRecord.stripeCustomerId,
-    });
-    await stripe.customers.update(userRecord.stripeCustomerId, {
-      invoice_settings: { default_payment_method: paymentMethodId },
-    });
-
-    // 4) Create Stripe subscription, expanding invoice.payment_intent
     const stripeSub = await stripe.subscriptions.create({
-      customer: userRecord.stripeCustomerId,
-      items: [{ price: selectedPriceId }],
-      expand: ['latest_invoice.payment_intent'],
+      customer: cid,
+      items: [{ price: priceId }],
+      expand: ['latest_invoice.payment_intent']
     });
 
-    // 5) Persist to your DB
-    const newSub = await prisma.subscription.create({
+    const dbSub = await prisma.subscription.create({
       data: {
-        userId,
-        plan: 'PLUS',
+        userId: uid,
+        plan: priceId,
         status: stripeSub.status.toUpperCase(),
         beganAt: new Date(stripeSub.created * 1000),
-        renewsAt: stripeSub.current_period_end
-          ? new Date(stripeSub.current_period_end * 1000)
-          : null,
-        stripeSubscriptionId: stripeSub.id,
-        stripePriceId: selectedPriceId,
-      },
+        renewsAt: stripeSub.current_period_end ? new Date(stripeSub.current_period_end * 1000) : null,
+        stripeSubscriptionId: stripeSub.id
+      }
     });
 
-    // 6) Safely pull out the client_secret (if any)
-    const invoiceIntent = stripeSub.latest_invoice?.payment_intent;
+    const intent = stripeSub.latest_invoice?.payment_intent;
     res.json({
-      subscriptionId: newSub.stripeSubscriptionId,
-      clientSecret: invoiceIntent?.client_secret || null,
+      subscriptionId: dbSub.stripeSubscriptionId,
+      clientSecret: intent?.client_secret || null,
       status: stripeSub.status.toLowerCase(),
-      currentPeriodEnd: newSub.renewsAt
-        ? Math.floor(newSub.renewsAt.getTime() / 1000)
-        : null,
-      plan: newSub.plan,
+      currentPeriodEnd: dbSub.renewsAt ? Math.floor(dbSub.renewsAt.getTime()/1000) : null,
+      plan: priceId
     });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
-/**
- * POST /api/payments/cancel-subscription
- */
-router.post('/cancel-subscription', async (req, res, next) => {
+// CANCEL subscription
+paymentsRouter.post('/cancel-subscription', async (req, res, next) => {
   try {
-    const userId = req.user.id;
     const { subscriptionId } = req.body;
-    if (!subscriptionId) {
-      return res.status(400).json({ error: 'Missing subscriptionId' });
-    }
+    if (!subscriptionId) return res.status(400).json({ error: 'Missing subscriptionId' });
 
-    const sub = await prisma.subscription.findUnique({
-      where: { stripeSubscriptionId: subscriptionId },
-    });
-    if (!sub || sub.userId !== userId) {
-      return res.status(404).json({ error: 'Subscription not found' });
-    }
+    const sub = await prisma.subscription.findUnique({ where: { stripeSubscriptionId: subscriptionId } });
+    if (!sub || sub.userId !== req.user.id) return res.status(404).json({ error: 'Not found' });
 
-    // Schedule cancel at period end in Stripe
-    const updatedStripeSub = await stripe.subscriptions.update(subscriptionId, {
-      cancel_at_period_end: true,
-    });
-
-    // Mirror in DB
+    const updated = await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true });
     await prisma.subscription.update({
       where: { id: sub.id },
-      data: {
-        status: updatedStripeSub.status.toUpperCase(),
-        cancelsAt: updatedStripeSub.cancel_at
-          ? new Date(updatedStripeSub.cancel_at * 1000)
-          : sub.cancelsAt,
-      },
+      data: { status: updated.status.toUpperCase(), cancelsAt: updated.cancel_at ? new Date(updated.cancel_at * 1000) : sub.cancelsAt }
     });
 
-    res.json({
-      success: true,
-      status: updatedStripeSub.status.toLowerCase(),
-      cancelAt: updatedStripeSub.cancel_at, // UNIX timestamp for period end
-    });
-  } catch (err) {
-    next(err);
-  }
+    res.json({ success: true, status: updated.status.toLowerCase(), cancelAt: updated.cancel_at });
+  } catch (err) { next(err); }
 });
 
-/**
- * Export for mounting & raw webhook use
- */
-export const paymentsRouter = router;
-
+// Webhook handler
 export async function webhookHandler(req, res) {
   const sig = req.headers['stripe-signature'];
   let event;
   try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
-    console.error('⚠️ Webhook signature verification failed.', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    console.error('Webhook error', err.message);
+    return res.status(400).send(`Error: ${err.message}`);
   }
 
-  // Handle subscription & invoice events
-  if (
-    [
-      'invoice.payment_succeeded',
-      'invoice.payment_failed',
-      'customer.subscription.updated',
-      'customer.subscription.deleted',
-    ].includes(event.type)
-  ) {
-    const sub = event.data.object;
-    const existing = await prisma.subscription.findUnique({
-      where: { stripeSubscriptionId: sub.id },
-    });
+  if (['invoice.payment_succeeded','invoice.payment_failed','customer.subscription.updated','customer.subscription.deleted'].includes(event.type)) {
+    const s = event.data.object;
+    const existing = await prisma.subscription.findUnique({ where: { stripeSubscriptionId: s.id } });
     if (existing) {
       await prisma.subscription.update({
         where: { id: existing.id },
         data: {
-          status: sub.status.toUpperCase(),
-          renewsAt: sub.current_period_end
-            ? new Date(sub.current_period_end * 1000)
-            : existing.renewsAt,
-          cancelsAt: sub.cancel_at
-            ? new Date(sub.cancel_at * 1000)
-            : existing.cancelsAt,
-        },
+          status: s.status.toUpperCase(),
+          renewsAt: s.current_period_end ? new Date(s.current_period_end*1000) : existing.renewsAt,
+          cancelsAt: s.cancel_at ? new Date(s.cancel_at*1000) : existing.cancelsAt
+        }
       });
     }
   }

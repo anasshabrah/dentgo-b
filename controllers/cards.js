@@ -1,162 +1,79 @@
-// backend/controllers/cards.js
-
+// controllers/cards.js
 import express from 'express';
-import Stripe from 'stripe';
+
 import prisma from '../lib/prismaClient.js';
+import { stripe } from '../lib/config.js';
+import { ensureCustomer } from '../lib/stripeHelpers.js';
 import requireAuth from '../middleware/requireAuth.js';
 
 const router = express.Router();
 router.use(requireAuth);
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: process.env.STRIPE_API_VERSION,
-});
-
-/**
- * GET /api/cards
- */
+// GET all cards
 router.get('/', async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const cards = await prisma.card.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-    });
-    res.json(cards);
-  } catch (err) {
-    console.error('GET /api/cards error:', err);
-    res.status(500).json({ error: 'Failed to fetch cards' });
-  }
+  const cards = await prisma.card.findMany({ where: { userId: req.user.id }, orderBy: { createdAt: 'desc' } });
+  res.json(cards);
 });
 
-/**
- * GET /api/cards/:id
- */
+// GET single card
 router.get('/:id', async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) return res.status(400).json({ error: 'Invalid card ID' });
-
-  try {
-    const card = await prisma.card.findUnique({ where: { id } });
-    if (!card || card.userId !== req.user.id) {
-      return res.status(404).json({ error: 'Card not found' });
-    }
-    res.json(card);
-  } catch (err) {
-    console.error('GET /api/cards/:id error:', err);
-    res.status(500).json({ error: 'Failed to fetch card' });
-  }
+  const id = Number(req.params.id);
+  const card = await prisma.card.findUnique({ where: { id } });
+  if (!card || card.userId !== req.user.id) return res.status(404).json({ error: 'Not found' });
+  res.json(card);
 });
 
-/**
- * POST /api/cards
- */
+// CREATE card
 router.post('/', async (req, res) => {
-  const userId = req.user.id;
-  const { paymentMethodId, nickName } = req.body || {};
+  const { paymentMethodId, nickName } = req.body;
+  if (!paymentMethodId) return res.status(400).json({ error: 'Missing paymentMethodId' });
 
-  if (!paymentMethodId) {
-    return res.status(400).json({ error: 'Missing paymentMethodId in request body' });
-  }
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+  const customerId = await ensureCustomer(user);
 
-  try {
-    // 1) Ensure we have a Stripe customer
-    let user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return res.status(404).json({ error: 'User not found' });
+  await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
+  await stripe.customers.update(customerId, { invoice_settings: { default_payment_method: paymentMethodId } });
 
-    let customerId = user.stripeCustomerId;
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: user.email,
-        name: user.name,
-      });
-      customerId = customer.id;
-      user = await prisma.user.update({
-        where: { id: userId },
-        data: { stripeCustomerId: customerId },
-      });
+  const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+  if (!pm.card) return res.status(400).json({ error: 'Not a card PM' });
+
+  const { brand, funding, last4, exp_month, exp_year } = pm.card;
+  const newCard = await prisma.card.create({
+    data: {
+      paymentMethodId,
+      network: brand.toUpperCase(),
+      type: funding === 'debit' ? 'DEBIT' : 'CREDIT',
+      last4,
+      expiryMonth: exp_month,
+      expiryYear: exp_year,
+      nickName: nickName || null,
+      isActive: true,
+      userId: req.user.id,
     }
-
-    // 2) Attach the PaymentMethod to that customer & set default
-    await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
-    await stripe.customers.update(customerId, {
-      invoice_settings: { default_payment_method: paymentMethodId },
-    });
-
-    // 3) Retrieve and persist card details
-    const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
-    const cardData = pm.card;
-    if (!cardData) {
-      return res.status(400).json({ error: 'PaymentMethod is not a card' });
-    }
-
-    const network = cardData.brand.toUpperCase();
-    const type = cardData.funding === 'debit' ? 'DEBIT' : 'CREDIT';
-    const newCard = await prisma.card.create({
-      data: {
-        paymentMethodId,
-        type,
-        network,
-        last4: cardData.last4,
-        expiryMonth: cardData.exp_month,
-        expiryYear: cardData.exp_year,
-        nickName: nickName || null,
-        isActive: true,
-        userId,
-      },
-    });
-
-    res.status(201).json(newCard);
-  } catch (err) {
-    console.error('POST /api/cards error:', err);
-    res.status(500).json({ error: 'Failed to create card' });
-  }
+  });
+  res.status(201).json(newCard);
 });
 
-/**
- * PUT /api/cards/:id
- */
+// UPDATE card
 router.put('/:id', async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const { nickName, isActive } = req.body;
-  if (isNaN(id)) return res.status(400).json({ error: 'Invalid card ID' });
+  const id = Number(req.params.id);
+  const card = await prisma.card.findUnique({ where: { id } });
+  if (!card || card.userId !== req.user.id) return res.status(404).json({ error: 'Not found' });
 
-  try {
-    const existing = await prisma.card.findUnique({ where: { id } });
-    if (!existing || existing.userId !== req.user.id) {
-      return res.status(404).json({ error: 'Card not found' });
-    }
-
-    const updated = await prisma.card.update({
-      where: { id },
-      data: { nickName, isActive },
-    });
-    res.json(updated);
-  } catch (err) {
-    console.error('PUT /api/cards/:id error:', err);
-    res.status(500).json({ error: 'Failed to update card' });
-  }
+  const updated = await prisma.card.update({
+    where: { id },
+    data: { nickName: req.body.nickName, isActive: req.body.isActive },
+  });
+  res.json(updated);
 });
 
-/**
- * DELETE /api/cards/:id
- */
+// DELETE card
 router.delete('/:id', async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) return res.status(400).json({ error: 'Invalid card ID' });
-
-  try {
-    const existing = await prisma.card.findUnique({ where: { id } });
-    if (!existing || existing.userId !== req.user.id) {
-      return res.status(404).json({ error: 'Card not found' });
-    }
-
-    await prisma.card.delete({ where: { id } });
-    res.status(204).end();
-  } catch (err) {
-    console.error('DELETE /api/cards/:id error:', err);
-    res.status(500).json({ error: 'Failed to delete card' });
-  }
+  const id = Number(req.params.id);
+  const card = await prisma.card.findUnique({ where: { id } });
+  if (!card || card.userId !== req.user.id) return res.status(404).json({ error: 'Not found' });
+  await prisma.card.delete({ where: { id } });
+  res.status(204).end();
 });
 
 export default router;

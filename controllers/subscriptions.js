@@ -1,137 +1,70 @@
-// backend/controllers/subscriptions.js
+// controllers/subscriptions.js
 import express from 'express';
+
 import prisma from '../lib/prismaClient.js';
+import requireAuth from '../middleware/requireAuth.js';
 
 const router = express.Router();
+router.use(requireAuth);
 
-async function findSub(id, userId) {
-  const sub = await prisma.subscription.findUnique({ where: { id } });
-  if (!sub || sub.userId !== userId) return null;
-  return sub;
+async function findSub(id, uid) {
+  const s = await prisma.subscription.findUnique({ where: { id } });
+  return s?.userId === uid ? s : null;
 }
 
-/* GET /api/subscriptions */
+// GET current subscription
 router.get('/', async (req, res) => {
-  try {
-    // Look only for active, paid subscriptions (ignore FREE)
-    const sub = await prisma.subscription.findFirst({
-      where: {
-        userId: req.user.id,
-        status: 'ACTIVE',
-        plan: { not: 'FREE' },
-      },
-    });
-
-    // If no paid plan, return the explicit Free‐plan payload
-    if (!sub) {
-      return res.json({
-        subscriptionId: null,
-        status: 'free',
-        currentPeriodEnd: null,
-        plan: 'FREE',
-        cancelAt: null,
-      });
-    }
-
-    // Otherwise return the paid subscription
-    return res.json({
-      subscriptionId: sub.stripeSubscriptionId,
-      status: sub.status.toLowerCase(),
-      currentPeriodEnd: sub.renewsAt
-        ? Math.floor(sub.renewsAt.getTime() / 1000)
-        : null,
-      plan: sub.plan, // e.g. "PLUS" or "PRO"
-      // Add cancelAt so the frontend can render the scheduled-cancel date
-      cancelAt: sub.cancelsAt
-        ? Math.floor(sub.cancelsAt.getTime() / 1000)
-        : null,
-    });
-  } catch (err) {
-    console.error('GET /api/subscriptions error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+  const paid = await prisma.subscription.findFirst({
+    where: { userId: req.user.id, status: 'ACTIVE', plan: { not: 'FREE' } }
+  });
+  if (!paid) {
+    return res.json({ subscriptionId: null, status: 'free', currentPeriodEnd: null, plan: 'FREE', cancelAt: null });
   }
+  res.json({
+    subscriptionId: paid.stripeSubscriptionId,
+    status: paid.status.toLowerCase(),
+    currentPeriodEnd: paid.renewsAt ? Math.floor(paid.renewsAt.getTime()/1000) : null,
+    plan: paid.plan,
+    cancelAt: paid.cancelsAt ? Math.floor(paid.cancelsAt.getTime()/1000) : null
+  });
 });
 
-/* GET /api/subscriptions/:id */
+// CRUD: GET by id
 router.get('/:id', async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
-    return res.status(400).json({ error: 'Invalid subscription ID' });
-  }
-
+  const id = Number(req.params.id);
   const sub = await findSub(id, req.user.id);
-  if (!sub) {
-    return res.status(404).json({ error: 'Subscription not found' });
-  }
-
+  if (!sub) return res.status(404).json({ error: 'Not found' });
   res.json(sub);
 });
 
-/* POST /api/subscriptions */
+// CREATE
 router.post('/', async (req, res) => {
   const { plan, status, beganAt, renewsAt, cancelsAt } = req.body;
-  try {
-    const sub = await prisma.subscription.create({
-      data: {
-        userId: req.user.id,
-        plan,
-        status,
-        beganAt,
-        renewsAt,
-        cancelsAt,
-      },
-    });
-    res.status(201).json(sub);
-  } catch (err) {
-    console.error('POST /api/subscriptions error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
+  const sub = await prisma.subscription.create({
+    data: { userId: req.user.id, plan, status, beganAt, renewsAt, cancelsAt }
+  });
+  res.status(201).json(sub);
 });
 
-/* PUT /api/subscriptions/:id */
+// UPDATE
 router.put('/:id', async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const { status, renewsAt, cancelsAt } = req.body;
-  if (isNaN(id)) {
-    return res.status(400).json({ error: 'Invalid subscription ID' });
-  }
-
-  const existing = await findSub(id, req.user.id);
-  if (!existing) {
-    return res.status(404).json({ error: 'Subscription not found' });
-  }
-
-  try {
-    const updated = await prisma.subscription.update({
-      where: { id },
-      data: { status, renewsAt, cancelsAt },
-    });
-    res.json(updated);
-  } catch (err) {
-    console.error('PUT /api/subscriptions/:id error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
+  const id = Number(req.params.id);
+  const sub = await findSub(id, req.user.id);
+  if (!sub) return res.status(404).json({ error: 'Not found' });
+  const updated = await prisma.subscription.update({
+    where: { id },
+    data: { status: req.body.status, renewsAt: req.body.renewsAt, cancelsAt: req.body.cancelsAt }
+  });
+  res.json(updated);
 });
 
-/* DELETE /api/subscriptions/:id */
+// DELETE
 router.delete('/:id', async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
-    return res.status(400).json({ error: 'Invalid subscription ID' });
-  }
-
-  const existing = await findSub(id, req.user.id);
-  if (!existing) {
-    return res.status(404).json({ error: 'Subscription not found' });
-  }
-
-  try {
-    await prisma.subscription.delete({ where: { id } });
-    res.status(204).end();
-  } catch (err) {
-    console.error('DELETE /api/subscriptions/:id error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
+  const id = Number(req.params.id);
+  const sub = await findSub(id, req.user.id);
+  if (!sub) return res.status(404).json({ error: 'Not found' });
+  await prisma.subscription.delete({ where: { id } });
+  res.status(204).end();
 });
 
 export default router;
