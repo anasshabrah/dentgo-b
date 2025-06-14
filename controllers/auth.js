@@ -18,22 +18,30 @@ import {
 import requireAuth from '../middleware/requireAuth.js';
 
 const router = express.Router();
-const authLimiter = rateLimit({
+
+// ─────────────────────────────────────────────────────────────
+// Rate limit all auth endpoints (10 requests/min)
+// ─────────────────────────────────────────────────────────────
+router.use(rateLimit({
   windowMs: 60_000,
   max: 10,
   message: { error: 'Too many auth attempts' },
   standardHeaders: true,
   legacyHeaders: false
-});
-router.use(authLimiter);
+}));
 
-// 1) CSRF token endpoint
+// ─────────────────────────────────────────────────────────────
+// 1) CSRF token
+// ─────────────────────────────────────────────────────────────
 router.get('/csrf-token', csrf, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
+// ─────────────────────────────────────────────────────────────
 // 2) Google OAuth
+// ─────────────────────────────────────────────────────────────
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+
 router.get(
   '/google/callback',
   csrf,
@@ -64,6 +72,7 @@ router.post('/google', csrf, async (req, res) => {
       update: { name, picture },
       create: { name, email, picture },
     });
+
     await prisma.oAuthAccount.upsert({
       where: { provider_providerUserId: { provider: 'google', providerUserId } },
       update: {},
@@ -80,8 +89,11 @@ router.post('/google', csrf, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────
 // 3) Apple OAuth
+// ─────────────────────────────────────────────────────────────
 router.get('/apple', passport.authenticate('apple'));
+
 router.post(
   '/apple/callback',
   csrf,
@@ -96,6 +108,7 @@ router.post(
         update: { name },
         create: { name, email, picture: null },
       });
+
       await prisma.oAuthAccount.upsert({
         where: { provider_providerUserId: { provider: 'apple', providerUserId } },
         update: {},
@@ -109,48 +122,52 @@ router.post(
     })(req, res, next)
 );
 
-// 4) Refresh tokens
+// ─────────────────────────────────────────────────────────────
+// 4) Refresh Token
+// ─────────────────────────────────────────────────────────────
 router.post('/refresh', csrf, async (req, res) => {
   const token = req.cookies.refresh;
   if (!token) return res.status(401).json({ error: 'No refresh token' });
 
-  let payload;
   try {
-    payload = verifyRefresh(token);
+    const payload = verifyRefresh(token);
+    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+    if (!user) return res.status(401).json({ error: 'User not found' });
+
+    const newAccess = signAccess(user);
+    const newRefresh = await issueRefresh(user);
+    setAuthCookies(res, newAccess, newRefresh);
+    res.json({ access: newAccess });
   } catch {
-    return res.status(401).json({ error: 'Invalid or expired refresh token' });
+    res.status(401).json({ error: 'Invalid or expired refresh token' });
   }
-
-  const user = await prisma.user.findUnique({ where: { id: payload.userId } });
-  if (!user) return res.status(401).json({ error: 'User not found' });
-
-  const newAccess = signAccess(user);
-  const newRefresh = await issueRefresh(user);
-  setAuthCookies(res, newAccess, newRefresh);
-  res.json({ access: newAccess });
 });
 
+// ─────────────────────────────────────────────────────────────
 // 5) Logout
-router.post('/logout', csrf, requireAuth, async (req, res) => {
+// ─────────────────────────────────────────────────────────────
+router.post('/logout', csrf, requireAuth, (req, res) => {
   clearAuthCookies(res);
   res.status(204).end();
 });
 
+// ─────────────────────────────────────────────────────────────
+// 6) Delete account
+// ─────────────────────────────────────────────────────────────
 router.delete('/delete', requireAuth, async (req, res) => {
   const userId = req.user?.userId;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    // Cancel Stripe subs
     const subs = await prisma.subscription.findMany({
       where: { userId, status: 'ACTIVE', stripeSubscriptionId: { not: null } },
       select: { stripeSubscriptionId: true }
     });
+
     await Promise.all(subs.map(s =>
       stripe.subscriptions.del(s.stripeSubscriptionId).catch(() => null)
     ));
 
-    // Delete Stripe customer + cards
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (user?.stripeCustomerId) {
       const { data: methods } = await stripe.paymentMethods.list({
@@ -167,6 +184,17 @@ router.delete('/delete', requireAuth, async (req, res) => {
     });
     const chatIds = sessions.map(s => s.id);
 
+    // Optional: Debug related row counts
+    console.log({
+      messages: await prisma.message.count({ where: { chatId: { in: chatIds } } }),
+      sessions: await prisma.chatSession.count({ where: { userId } }),
+      notifications: await prisma.notification.count({ where: { userId } }),
+      cards: await prisma.card.count({ where: { userId } }),
+      subscriptions: await prisma.subscription.count({ where: { userId } }),
+      oauth: await prisma.oAuthAccount.count({ where: { userId } }),
+      tokens: await prisma.refreshToken.count({ where: { userId } }),
+    });
+
     await prisma.$transaction([
       prisma.message.deleteMany({ where: { chatId: { in: chatIds } } }),
       prisma.chatSession.deleteMany({ where: { userId } }),
@@ -174,7 +202,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
       prisma.subscription.deleteMany({ where: { userId } }),
       prisma.card.deleteMany({ where: { userId } }),
       prisma.oAuthAccount.deleteMany({ where: { userId } }),
-      prisma.refreshToken.deleteMany({ where: { userId } }), // 🔥 YOU NEED THIS!
+      prisma.refreshToken.deleteMany({ where: { userId } }),
       prisma.user.delete({ where: { id: userId } })
     ]);
 
@@ -185,3 +213,5 @@ router.delete('/delete', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to delete account' });
   }
 });
+
+export default router;
