@@ -6,6 +6,7 @@ import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import passport from 'passport';
 import rateLimit from 'express-rate-limit';
+import { v4 as uuid } from 'uuid';
 
 import { corsConfig } from './middleware/corsConfig.js';
 import requireAuth from './middleware/requireAuth.js';
@@ -20,22 +21,35 @@ import chatRoute from './controllers/chat.js';
 import sessionsRoute from './controllers/chats.js';
 import { paymentsRouter, webhookHandler } from './controllers/payments.js';
 
+// ← Swagger setup
+import { setupOpenApi } from './lib/openapi.js';
+
 const app = express();
 app.set('trust proxy', 1);
 
+// Assign a request ID
+app.use((req, res, next) => {
+  req.id = uuid();
+  next();
+});
+
+// Morgan tokens for req id & user id
+morgan.token('req_id', (req) => req.id);
+morgan.token('user_id', (req) => req.user?.id ?? '-');
+
 // 1) Logging & cookies
-app.use(morgan('dev'), cookieParser());
+app.use(morgan(':req_id :user_id :method :url :status :response-time ms'), cookieParser());
 
 // 2) CORS
 app.use(corsConfig);
 
-// 3) Stripe webhook (raw)
+// 3) Stripe webhook (raw body)
 app.post('/api/payments/webhook', express.raw({ type: '*/*' }), webhookHandler);
 
 // 4) JSON + Passport
 app.use(express.json(), passport.initialize());
 
-// 5) Auth routes w/ CSRF
+// 5) Auth routes with CSRF protection
 app.use(
   '/api/auth',
   (req, res, next) =>
@@ -52,22 +66,26 @@ app.use('/api/cards', requireAuth, cardsRoute);
 app.use('/api/notifications', requireAuth, notificationsRoute);
 app.use('/api/subscriptions', requireAuth, subscriptionsRoute);
 
-// 7) Chat + rate limit
+// 7) Chat + rate limiting
 const chatLimiter = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'Too many requests' } });
 app.use('/api/chat', requireAuth, chatLimiter, chatRoute);
 app.use('/api/chats', requireAuth, sessionsRoute);
 
-// 8) Health-check & root
+// ─── Swagger UI /docs ─────────────────────────────────────────────────────────
+setupOpenApi(app);
+
+// 8) Health check & root
 app.get('/api/ping', (_, res) => res.json({ ok: true }));
 app.get('/', (_, res) => res.send('🚀 DentGo Backend is live!'));
 
 // 9) Global error handler
-app.use((err, _, res, next) => {
-  console.error(err);
+app.use((err, req, res, next) => {
+  console.error(`ERROR [${req.id}] user=${req.user?.id}`, err);
   if (err.code === 'EBADCSRFTOKEN') return res.status(403).json({ error: 'Invalid CSRF token' });
   if (err.message?.startsWith('CORS:')) return res.status(403).json({ error: err.message });
-  next(err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
+// Start server
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
