@@ -46,10 +46,10 @@ app.use(
 // 2) CORS — must precede any routes that read or set cookies
 app.use(corsConfig);
 
-// 3) Stripe webhook (raw body)
+// 3) Stripe webhook (raw body scoped to application/json)
 app.post(
   '/api/payments/webhook',
-  express.raw({ type: '*/*' }),
+  express.raw({ type: 'application/json' }),
   webhookHandler
 );
 
