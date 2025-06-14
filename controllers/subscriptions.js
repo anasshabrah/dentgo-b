@@ -69,9 +69,9 @@ router.post('/', async (req, res, next) => {
         userId: req.user.id,
         plan,
         status,
-        beganAt,
-        renewsAt,
-        cancelsAt
+        beganAt: new Date(beganAt),
+        renewsAt: renewsAt ? new Date(renewsAt) : null,
+        cancelsAt: cancelsAt ? new Date(cancelsAt) : null
       }
     });
     res.status(201).json(sub);
@@ -90,7 +90,11 @@ router.put('/:id', async (req, res, next) => {
     const { status, renewsAt, cancelsAt } = subscriptionCreateSchema.parse(req.body);
     const updated = await prisma.subscription.update({
       where: { id },
-      data: { status, renewsAt, cancelsAt }
+      data: {
+        status,
+        renewsAt: renewsAt ? new Date(renewsAt) : null,
+        cancelsAt: cancelsAt ? new Date(cancelsAt) : null
+      }
     });
     res.json(updated);
   } catch (err) {
