@@ -20,6 +20,7 @@ import subscriptionsRoute from './controllers/subscriptions.js';
 import chatRoute from './controllers/chat.js';
 import sessionsRoute from './controllers/chats.js';
 import { paymentsRouter, webhookHandler } from './controllers/payments.js';
+import xrayRoute from './controllers/xray.js'; // ← New route added
 
 // ← Swagger setup
 import { setupOpenApi } from './lib/openapi.js';
@@ -82,14 +83,17 @@ const chatLimiter = rateLimit({
 app.use('/api/chat', requireAuth, chatLimiter, chatRoute);
 app.use('/api/chats', requireAuth, sessionsRoute);
 
+// 8) XRay Upload (protected)
+app.use('/api', requireAuth, xrayRoute); // ← Added XRay upload controller
+
 // ─── Swagger UI /docs ─────────────────────────────────────────────────────────
 setupOpenApi(app);
 
-// 8) Health check & root
+// 9) Health check & root
 app.get('/api/ping', (_, res) => res.json({ ok: true }));
 app.get('/', (_, res) => res.send('🚀 DentGo Backend is live!'));
 
-// 9) Global error handler
+// 10) Global error handler
 app.use((err, req, res, next) => {
   console.error(`ERROR [${req.id}] user=${req.user?.id}`, err);
   if (err.code === 'EBADCSRFTOKEN')
