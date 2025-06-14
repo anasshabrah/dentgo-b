@@ -114,7 +114,6 @@ router.post('/refresh', csrf, async (req, res) => {
   const token = req.cookies.refresh;
   if (!token) return res.status(401).json({ error: 'No refresh token' });
 
-  // Verify/parse JWT
   let payload;
   try {
     payload = verifyRefresh(token);
@@ -139,37 +138,40 @@ router.post('/logout', csrf, requireAuth, async (req, res) => {
 
 // 6) Delete account
 router.delete('/delete', requireAuth, async (req, res) => {
-  const uid = req.user.id;
+  const userId = req.user?.userId;
+  if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+
   try {
     const subs = await prisma.subscription.findMany({
-      where: { userId: uid, status: 'ACTIVE', stripeSubscriptionId: { not: null } },
+      where: { userId, status: 'ACTIVE', stripeSubscriptionId: { not: null } },
       select: { stripeSubscriptionId: true }
     });
     await Promise.all(subs.map(s =>
       stripe.subscriptions.del(s.stripeSubscriptionId).catch(() => null)
     ));
 
-    const u = await prisma.user.findUnique({ where: { id: uid } });
-    if (u.stripeCustomerId) {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (user?.stripeCustomerId) {
       const { data: methods } = await stripe.paymentMethods.list({
-        customer: u.stripeCustomerId,
+        customer: user.stripeCustomerId,
         type: 'card'
       });
       await Promise.all(methods.map(pm => stripe.paymentMethods.detach(pm.id)));
-      await stripe.customers.del(u.stripeCustomerId);
+      await stripe.customers.del(user.stripeCustomerId);
     }
 
     const sessions = await prisma.chatSession.findMany({
-      where: { userId: uid },
+      where: { userId },
       select: { id: true }
     });
     const chatIds = sessions.map(s => s.id);
+
     await prisma.$transaction([
       prisma.message.deleteMany({ where: { chatId: { in: chatIds } } }),
-      prisma.chatSession.deleteMany({ where: { userId: uid } }),
-      prisma.subscription.deleteMany({ where: { userId: uid } }),
-      prisma.oAuthAccount.deleteMany({ where: { userId: uid } }),
-      prisma.user.delete({ where: { id: uid } })
+      prisma.chatSession.deleteMany({ where: { userId } }),
+      prisma.subscription.deleteMany({ where: { userId } }),
+      prisma.oAuthAccount.deleteMany({ where: { userId } }),
+      prisma.user.delete({ where: { id: userId } })
     ]);
 
     clearAuthCookies(res);
