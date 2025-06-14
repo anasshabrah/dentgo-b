@@ -8,7 +8,7 @@ import { ensureCustomer } from '../lib/stripeHelpers.js';
 import requireAuth from '../middleware/requireAuth.js';
 import {
   paymentIntentSchema,
-  subscriptionCreateSchema,
+  subscriptionStripeCreateSchema,
   subscriptionCancelSchema
 } from '../lib/schemas.js';
 
@@ -56,10 +56,11 @@ paymentsRouter.post('/create-payment-intent', async (req, res, next) => {
 
 paymentsRouter.post('/create-subscription', async (req, res, next) => {
   try {
-    const { priceId = 'FREE', paymentMethodId } = subscriptionCreateSchema.parse(req.body);
+    const { plan, priceId, paymentMethodId } = subscriptionStripeCreateSchema.parse(req.body);
     const uid = req.user.id;
 
-    if (priceId === 'FREE') {
+    // FREE plan shortcut
+    if (plan === 'FREE') {
       const existing = await prisma.subscription.findFirst({
         where: { userId: uid, plan: 'FREE', status: 'ACTIVE' }
       });
@@ -80,23 +81,10 @@ paymentsRouter.post('/create-subscription', async (req, res, next) => {
     }
 
     // PLUS plan
-    const existingPlus = await prisma.subscription.findFirst({
-      where: { userId: uid, plan: priceId, status: 'ACTIVE' }
-    });
-    if (existingPlus) {
-      return res.json({
-        subscriptionId: existingPlus.stripeSubscriptionId,
-        status: existingPlus.status.toLowerCase(),
-        currentPeriodEnd: existingPlus.renewsAt
-          ? Math.floor(existingPlus.renewsAt.getTime() / 1000)
-          : null,
-        plan: priceId
-      });
-    }
-
     if (!paymentMethodId) {
       return res.status(400).json({ error: 'Missing paymentMethodId' });
     }
+
     const user = await prisma.user.findUnique({ where: { id: uid } });
     const customerId = user.stripeCustomerId;
     await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
@@ -113,13 +101,14 @@ paymentsRouter.post('/create-subscription', async (req, res, next) => {
     const dbSub = await prisma.subscription.create({
       data: {
         userId: uid,
-        plan: priceId,
+        plan,
         status: stripeSub.status.toUpperCase(),
         beganAt: new Date(stripeSub.created * 1000),
         renewsAt: stripeSub.current_period_end
           ? new Date(stripeSub.current_period_end * 1000)
           : null,
-        stripeSubscriptionId: stripeSub.id
+        stripeSubscriptionId: stripeSub.id,
+        stripePriceId: priceId
       }
     });
 
@@ -131,7 +120,7 @@ paymentsRouter.post('/create-subscription', async (req, res, next) => {
       currentPeriodEnd: dbSub.renewsAt
         ? Math.floor(dbSub.renewsAt.getTime() / 1000)
         : null,
-      plan: priceId
+      plan
     });
   } catch (err) {
     if (err instanceof ZodError) return res.status(400).json({ error: err.errors });
