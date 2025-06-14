@@ -8,6 +8,7 @@ import requireAuth from '../middleware/requireAuth.js';
 const router = express.Router();
 
 // GET /api/users/me
+// Returns 401 if user is not authenticated — expected during first visit.
 router.get('/me', requireAuth, (req, res) => {
   res.json({ user: req.user });
 });

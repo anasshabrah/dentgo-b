@@ -1,10 +1,6 @@
 // middleware/requireAuth.js
 import jwt from 'jsonwebtoken';
 
-/**
- * Middleware to protect routes using access token from cookies.
- * Sets `req.user = { id, role }` on success.
- */
 export default function requireAuth(req, res, next) {
   const token = req.cookies?.access;
   if (!token) {
@@ -14,7 +10,6 @@ export default function requireAuth(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Normalize shape
     req.user = {
       id: payload?.userId,
       role: payload?.role,

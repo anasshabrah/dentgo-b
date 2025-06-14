@@ -113,6 +113,7 @@ router.post(
 );
 
 // 4) Refresh Token
+// Returns 401 if refresh cookie is missing or invalid — expected when not logged in yet
 router.post('/refresh', csrf, async (req, res) => {
   const token = req.cookies.refresh;
   if (!token) return res.status(401).json({ error: 'No refresh token' });
