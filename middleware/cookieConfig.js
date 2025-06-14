@@ -11,26 +11,29 @@ if (process.env.NODE_ENV === 'production' && !process.env.COOKIE_DOMAIN) {
   );
 }
 
+// base options for all auth cookies (no maxAge here)
 const baseCookieOptions = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
   sameSite: 'none',
   path: '/',
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   ...domainSetting,
 };
 
 /**
  * Returns cookie options for setting authentication cookies.
- * Use with res.cookie('access', token, authCookieOpts())
+ * You can override maxAge (ms) per cookie.
  */
-export function authCookieOpts() {
-  return { ...baseCookieOptions };
+export function authCookieOpts({ maxAge } = {}) {
+  return {
+    ...baseCookieOptions,
+    ...(typeof maxAge === 'number' ? { maxAge } : {}),
+  };
 }
 
 /**
  * Returns cookie options for clearing cookies.
- * Use with res.clearCookie('access', clearCookieOpts())
+ * Express will set the expiration to the past; we just need matching path/domain.
  */
 export function clearCookieOpts() {
   return { ...baseCookieOptions };

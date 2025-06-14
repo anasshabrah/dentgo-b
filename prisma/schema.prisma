@@ -21,7 +21,6 @@ model User {
   notifications     Notification[]
   oauth             OAuthAccount[]
   subscriptions     Subscription[]
-  refreshTokens     RefreshToken[]
 
   @@index([email])
 }
@@ -100,17 +99,6 @@ model Notification {
   createdAt DateTime @default(now())
   userId    Int
   user      User     @relation(fields: [userId], references: [id])
-}
-
-model RefreshToken {
-  id        String   @id @default(uuid())
-  tokenHash String
-  user      User     @relation(fields: [userId], references: [id])
-  userId    Int
-  createdAt DateTime @default(now())
-  expiresAt DateTime
-
-  @@index([userId])
 }
 
 enum Role {

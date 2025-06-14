@@ -175,7 +175,6 @@ router.delete('/delete', csrf, requireAuth, async (req, res) => {
       prisma.subscription.deleteMany({ where: { userId } }),
       prisma.card.deleteMany({ where: { userId } }),
       prisma.oAuthAccount.deleteMany({ where: { userId } }),
-      prisma.refreshToken.deleteMany({ where: { userId } }),
       prisma.user.delete({ where: { id: userId } }),
     ]);
 
