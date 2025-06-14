@@ -113,7 +113,6 @@ router.post(
 );
 
 // 4) Refresh Token
-// Returns 401 if refresh cookie is missing or invalid — expected when not logged in yet
 router.post('/refresh', csrf, async (req, res) => {
   const token = req.cookies.refresh;
   if (!token) return res.status(401).json({ error: 'No refresh token' });
@@ -138,8 +137,8 @@ router.post('/logout', csrf, requireAuth, (req, res) => {
   res.status(204).end();
 });
 
-// 6) Delete account
-router.delete('/delete', requireAuth, async (req, res) => {
+// 6) Delete account (🛠️ FIXED: added `csrf`)
+router.delete('/delete', csrf, requireAuth, async (req, res) => {
   const userId = req.user?.userId;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
