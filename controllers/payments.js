@@ -1,4 +1,5 @@
-// controllers/payments.js
+// backend/controllers/payments.js
+
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import Stripe from 'stripe';
@@ -6,7 +7,7 @@ import requireAuth from '../middleware/requireAuth.js';
 
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2025-05-28.basil',
+  apiVersion: process.env.STRIPE_API_VERSION,
 });
 
 const router = express.Router();

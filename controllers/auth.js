@@ -17,7 +17,7 @@ import { authCookieOpts, clearCookieOpts } from '../middleware/cookieConfig.js';
 const router = express.Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2025-05-28.basil',
+  apiVersion: process.env.STRIPE_API_VERSION,
 });
 
 const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;

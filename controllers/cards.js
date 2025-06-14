@@ -1,4 +1,5 @@
-// controllers/cards.js
+// backend/controllers/cards.js
+
 import express from 'express';
 import Stripe from 'stripe';
 import prisma from '../lib/prismaClient.js';
@@ -8,7 +9,7 @@ const router = express.Router();
 router.use(requireAuth);
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2022-11-15',
+  apiVersion: process.env.STRIPE_API_VERSION,
 });
 
 /**
