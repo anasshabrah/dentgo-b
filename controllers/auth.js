@@ -1,4 +1,4 @@
-// controllers/auth.js
+// File: C:\Users\hanos\cb\backend\controllers\auth.js
 import express from 'express';
 import passport from 'passport';
 import rateLimit from 'express-rate-limit';
@@ -17,7 +17,6 @@ import requireAuth from '../middleware/requireAuth.js';
 
 const router = express.Router();
 
-// Rate limit: 10 req/min
 router.use(rateLimit({
   windowMs: 60_000,
   max: 10,
@@ -26,12 +25,12 @@ router.use(rateLimit({
   legacyHeaders: false,
 }));
 
-// 1) CSRF token
+// CSRF token
 router.get('/csrf-token', csrf, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
-// 2) Google OAuth
+// Google OAuth (browser)
 router.get('/google',
   passport.authenticate('google', { scope: ['profile','email'] })
 );
@@ -47,6 +46,7 @@ router.get('/google/callback', csrf, (req, res, next) =>
   })(req, res, next)
 );
 
+// Google OAuth (token)
 router.post('/google', csrf, async (req, res) => {
   const { credential } = req.body;
   if (!credential) return res.status(400).json({ error: 'Missing credential' });
@@ -58,15 +58,19 @@ router.post('/google', csrf, async (req, res) => {
     const { sub: providerUserId, email: rawEmail, name, picture } = ticket.getPayload();
     const email = normalizeEmail(rawEmail);
 
+    // Upsert user
     const user = await prisma.user.upsert({
       where: { email },
       update: { name, picture },
       create: { name, email, picture },
     });
 
+    // Upsert OAuthAccount, updating if it already exists
     await prisma.oAuthAccount.upsert({
-      where: { provider_providerUserId: { provider: 'google', providerUserId } },
-      update: {},
+      where: {
+        provider_providerUserId: { provider: 'google', providerUserId }
+      },
+      update: { userId: user.id },
       create: { provider: 'google', providerUserId, userId: user.id },
     });
 
@@ -80,7 +84,7 @@ router.post('/google', csrf, async (req, res) => {
   }
 });
 
-// 3) Apple OAuth
+// Apple OAuth (browser)
 router.get('/apple', passport.authenticate('apple'));
 
 router.post('/apple/callback', csrf, (req, res, next) =>
@@ -98,8 +102,8 @@ router.post('/apple/callback', csrf, (req, res, next) =>
 
     await prisma.oAuthAccount.upsert({
       where: { provider_providerUserId: { provider: 'apple', providerUserId } },
-      update: {},
-      create: { provider: 'apple', providerUserId, userId: user.id },
+      update: { userId: user.id, accessToken: profileUser.accessToken ?? undefined, refreshToken: profileUser.refreshToken ?? undefined, expiresAt: null },
+      create: { provider: 'apple', providerUserId, userId: user.id, accessToken: profileUser.accessToken, refreshToken: profileUser.refreshToken, expiresAt: null },
     });
 
     const access  = signAccess(user);
@@ -109,7 +113,7 @@ router.post('/apple/callback', csrf, (req, res, next) =>
   })(req, res, next)
 );
 
-// 4) Refresh Token
+// Refresh token
 router.post('/refresh', csrf, async (req, res) => {
   const token = req.cookies.refresh;
   if (!token) return res.status(401).json({ error: 'No refresh token' });
@@ -128,44 +132,36 @@ router.post('/refresh', csrf, async (req, res) => {
   }
 });
 
-// 5) Logout
-router.post('/logout', csrf, requireAuth, (req, res) => {
+// Logout (idempotent)
+router.post('/logout', csrf, (req, res) => {
   clearAuthCookies(res);
   res.status(204).end();
 });
 
-// 6) Delete account
-// ⚠️ Note: csrf must come before requireAuth, and we read req.user.id (not userId)
+// Delete account
 router.delete('/delete', csrf, requireAuth, async (req, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    // cancel Stripe subscriptions, detach PMs, delete user data...
+    // cancel subscriptions
     const subs = await prisma.subscription.findMany({
       where: { userId, status: 'ACTIVE', stripeSubscriptionId: { not: null } },
       select: { stripeSubscriptionId: true },
     });
-
-    // immediately cancel each subscription
     await Promise.all(subs.map(s =>
       stripe.subscriptions.cancel(s.stripeSubscriptionId).catch(() => null)
     ));
 
+    // detach and delete customer
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (user?.stripeCustomerId) {
-      const { data: methods } = await stripe.paymentMethods.list({
-        customer: user.stripeCustomerId,
-        type: 'card',
-      });
+      const { data: methods } = await stripe.paymentMethods.list({ customer: user.stripeCustomerId, type: 'card' });
       await Promise.all(methods.map(pm => stripe.paymentMethods.detach(pm.id)));
       await stripe.customers.del(user.stripeCustomerId);
     }
 
-    const sessions = await prisma.chatSession.findMany({
-      where: { userId },
-      select: { id: true },
-    });
+    const sessions = await prisma.chatSession.findMany({ where: { userId }, select: { id: true } });
     const chatIds = sessions.map(s => s.id);
 
     await prisma.$transaction([
