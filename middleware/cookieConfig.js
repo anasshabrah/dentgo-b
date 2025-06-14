@@ -1,4 +1,15 @@
-// backend/middleware/cookieConfig.js
+// middleware/cookieConfig.js
+
+const domainSetting =
+  process.env.NODE_ENV === 'production' && process.env.COOKIE_DOMAIN
+    ? { domain: process.env.COOKIE_DOMAIN }
+    : {};
+
+if (process.env.NODE_ENV === 'production' && !process.env.COOKIE_DOMAIN) {
+  console.warn(
+    '[cookieConfig] WARNING: COOKIE_DOMAIN is not set in production. Cross-subdomain auth may break.'
+  );
+}
 
 const baseCookieOptions = {
   httpOnly: true,
@@ -6,9 +17,7 @@ const baseCookieOptions = {
   sameSite: 'none',
   path: '/',
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-  ...(process.env.NODE_ENV === 'production' && process.env.COOKIE_DOMAIN
-    ? { domain: process.env.COOKIE_DOMAIN }
-    : {}),
+  ...domainSetting,
 };
 
 /**

@@ -3,7 +3,12 @@ import jwt from 'jsonwebtoken';
 
 export default function requireAuth(req, res, next) {
   const token = req.cookies?.access;
+
   if (!token) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('Missing access token cookie');
+      console.warn('Cookies received:', req.cookies);
+    }
     return res.status(401).json({ error: 'Missing auth token' });
   }
 
@@ -23,6 +28,7 @@ export default function requireAuth(req, res, next) {
   } catch (err) {
     if (process.env.NODE_ENV !== 'production') {
       console.error('JWT verification failed:', err.message);
+      console.error('Token value:', token);
     }
     res.status(401).json({ error: 'Invalid or expired token' });
   }

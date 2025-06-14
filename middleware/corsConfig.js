@@ -13,9 +13,18 @@ const VERCEL = /^https:\/\/dentgo.*\.vercel\.app$/;
 
 export const corsConfig = cors({
   origin: (origin, cb) => {
-    if (!origin || ORIGINS.includes(origin) || VERCEL.test(origin)) {
+    if (!origin) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('CORS: request with no origin');
+      }
+      return cb(null, true); // allow non-browser tools in dev
+    }
+
+    if (ORIGINS.includes(origin) || VERCEL.test(origin)) {
       return cb(null, true);
     }
+
+    console.warn(`CORS blocked: ${origin}`);
     cb(new Error(`CORS: origin "${origin}" not allowed`));
   },
   credentials: true,
