@@ -4,6 +4,7 @@ import passport from 'passport';
 import rateLimit from 'express-rate-limit';
 import prisma from '../lib/prismaClient.js';
 import { googleClient, stripe } from '../lib/config.js';
+import { normalizeEmail } from '../lib/normalize.js';
 import {
   signAccess,
   issueRefresh,
