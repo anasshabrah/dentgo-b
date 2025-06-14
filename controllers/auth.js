@@ -146,8 +146,9 @@ router.delete('/delete', csrf, requireAuth, async (req, res) => {
       select: { stripeSubscriptionId: true },
     });
 
+    // immediately cancel each subscription
     await Promise.all(subs.map(s =>
-      stripe.subscriptions.del(s.stripeSubscriptionId).catch(() => null)
+      stripe.subscriptions.cancel(s.stripeSubscriptionId).catch(() => null)
     ));
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
