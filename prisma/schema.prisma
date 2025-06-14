@@ -38,7 +38,6 @@ model Subscription {
   user                 User                @relation(fields: [userId], references: [id])
 }
 
-
 model OAuthAccount {
   id             Int       @id @default(autoincrement())
   provider       String
@@ -53,19 +52,19 @@ model OAuthAccount {
 }
 
 model Card {
-  id          Int         @id @default(autoincrement())
-  type        CardType
-  network     CardNetwork
-  last4       String      @db.Char(4)
-  expiryMonth Int
-  expiryYear  Int
-  nickName    String?
-  isActive    Boolean     @default(true)
-  userId      Int
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  paymentMethodId  String
-  user        User        @relation(fields: [userId], references: [id])
+  id              Int         @id @default(autoincrement())
+  type            CardType
+  network         CardNetwork
+  last4           String      @db.Char(4)
+  expiryMonth     Int
+  expiryYear      Int
+  nickName        String?
+  isActive        Boolean     @default(true)
+  userId          Int
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  paymentMethodId String
+  user            User        @relation(fields: [userId], references: [id])
 }
 
 model ChatSession {
@@ -73,8 +72,8 @@ model ChatSession {
   title     String?
   startedAt DateTime  @default(now())
   endedAt   DateTime?
-  isEnded    Boolean   @default(false)
-  isActive   Boolean   @default(true)
+  isEnded   Boolean   @default(false)
+  isActive  Boolean   @default(true)
   userId    Int
   user      User      @relation(fields: [userId], references: [id])
   messages  Message[]
@@ -129,6 +128,10 @@ enum SubscriptionStatus {
   ACTIVE
   CANCELED
   EXPIRED
+  INCOMPLETE
+  PAST_DUE
+  TRIALING
+  INCOMPLETE_EXPIRED
 }
 
 enum MessageRole {
