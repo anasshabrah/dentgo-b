@@ -38,13 +38,20 @@ morgan.token('req_id', (req) => req.id);
 morgan.token('user_id', (req) => req.user?.id ?? '-');
 
 // 1) Logging & cookies
-app.use(morgan(':req_id :user_id :method :url :status :response-time ms'), cookieParser());
+app.use(
+  morgan(':req_id :user_id :method :url :status :response-time ms'),
+  cookieParser()
+);
 
-// 2) CORS
+// 2) CORS — must precede any routes that read or set cookies
 app.use(corsConfig);
 
 // 3) Stripe webhook (raw body)
-app.post('/api/payments/webhook', express.raw({ type: '*/*' }), webhookHandler);
+app.post(
+  '/api/payments/webhook',
+  express.raw({ type: '*/*' }),
+  webhookHandler
+);
 
 // 4) JSON + Passport
 app.use(express.json(), passport.initialize());
@@ -67,7 +74,11 @@ app.use('/api/notifications', requireAuth, notificationsRoute);
 app.use('/api/subscriptions', requireAuth, subscriptionsRoute);
 
 // 7) Chat + rate limiting
-const chatLimiter = rateLimit({ windowMs: 60_000, max: 20, message: { error: 'Too many requests' } });
+const chatLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 20,
+  message: { error: 'Too many requests' },
+});
 app.use('/api/chat', requireAuth, chatLimiter, chatRoute);
 app.use('/api/chats', requireAuth, sessionsRoute);
 
@@ -81,8 +92,10 @@ app.get('/', (_, res) => res.send('🚀 DentGo Backend is live!'));
 // 9) Global error handler
 app.use((err, req, res, next) => {
   console.error(`ERROR [${req.id}] user=${req.user?.id}`, err);
-  if (err.code === 'EBADCSRFTOKEN') return res.status(403).json({ error: 'Invalid CSRF token' });
-  if (err.message?.startsWith('CORS:')) return res.status(403).json({ error: err.message });
+  if (err.code === 'EBADCSRFTOKEN')
+    return res.status(403).json({ error: 'Invalid CSRF token' });
+  if (err.message?.startsWith('CORS:'))
+    return res.status(403).json({ error: err.message });
   res.status(500).json({ error: 'Internal server error' });
 });
 
