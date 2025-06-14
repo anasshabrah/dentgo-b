@@ -1,4 +1,5 @@
 // backend/controllers/auth.js
+
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
@@ -16,7 +17,7 @@ import { authCookieOpts, clearCookieOpts } from '../middleware/cookieConfig.js';
 const router = express.Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2022-11-15',
+  apiVersion: '2025-05-28.basil',
 });
 
 const ACCESS_TTL = +process.env.ACCESS_TOKEN_TTL_MIN * 60;
@@ -76,25 +77,35 @@ const csrfProtection = csurf({
   }
 });
 
+// 1) Expose CSRF token for client to fetch
 router.get('/csrf-token', csrfProtection, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
+// 2) Google OAuth handlers
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
-router.get('/google/callback', csrfProtection, (req, res, next) => {
-  passport.authenticate('google', { session: false, failureRedirect: '/LetsYouIn' }, async (err, user) => {
-    if (err) return next(err);
-    if (!user) return res.redirect('/LetsYouIn');
-    try {
-      const access = signAccess(user);
-      const refresh = await issueRefresh(user);
-      setAuthCookies(res, access, refresh);
-      res.redirect(process.env.FRONTEND_ORIGIN);
-    } catch (e) {
-      next(e);
-    }
-  })(req, res, next);
-});
+router.get(
+  '/google/callback',
+  csrfProtection,
+  (req, res, next) => {
+    passport.authenticate(
+      'google',
+      { session: false, failureRedirect: '/LetsYouIn' },
+      async (err, user) => {
+        if (err) return next(err);
+        if (!user) return res.redirect('/LetsYouIn');
+        try {
+          const access = signAccess(user);
+          const refresh = await issueRefresh(user);
+          setAuthCookies(res, access, refresh);
+          res.redirect(process.env.FRONTEND_ORIGIN);
+        } catch (e) {
+          next(e);
+        }
+      }
+    )(req, res, next);
+  }
+);
 
 router.post('/google', csrfProtection, async (req, res) => {
   const { credential } = req.body;
@@ -128,43 +139,59 @@ router.post('/google', csrfProtection, async (req, res) => {
   }
 });
 
+// 3) Apple OAuth handlers
 router.get('/apple', passport.authenticate('apple'));
-router.post('/apple/callback', csrfProtection, (req, res, next) => {
-  passport.authenticate('apple', { session: false, failureRedirect: '/LetsYouIn' }, async (err, user) => {
-    if (err) return next(err);
-    if (!user) return res.redirect('/LetsYouIn');
-    try {
-      const { providerUserId, email: rawEmail, name } = user;
-      const email = normalizeEmail(rawEmail);
-      const upsertedUser = await prisma.user.upsert({
-        where: { email },
-        update: { name },
-        create: { name, email, picture: null },
-      });
-      await prisma.oAuthAccount.upsert({
-        where: { provider_providerUserId: { provider: 'apple', providerUserId } },
-        update: {},
-        create: { provider: 'apple', providerUserId, userId: upsertedUser.id },
-      });
+router.post(
+  '/apple/callback',
+  csrfProtection,
+  (req, res, next) => {
+    passport.authenticate(
+      'apple',
+      { session: false, failureRedirect: '/LetsYouIn' },
+      async (err, user) => {
+        if (err) return next(err);
+        if (!user) return res.redirect('/LetsYouIn');
+        try {
+          const { providerUserId, email: rawEmail, name } = user;
+          const email = normalizeEmail(rawEmail);
+          const upserted = await prisma.user.upsert({
+            where: { email },
+            update: { name },
+            create: { name, email, picture: null },
+          });
+          await prisma.oAuthAccount.upsert({
+            where: { provider_providerUserId: { provider: 'apple', providerUserId } },
+            update: {},
+            create: { provider: 'apple', providerUserId, userId: upserted.id },
+          });
 
-      const access = signAccess(upsertedUser);
-      const refresh = await issueRefresh(upsertedUser);
-      setAuthCookies(res, access, refresh);
-      res.json({ user: upsertedUser });
-    } catch (e) {
-      next(e);
-    }
-  })(req, res, next);
-});
+          const access = signAccess(upserted);
+          const refresh = await issueRefresh(upserted);
+          setAuthCookies(res, access, refresh);
+          res.json({ user: upserted });
+        } catch (e) {
+          next(e);
+        }
+      }
+    )(req, res, next);
+  }
+);
 
-router.post('/refresh', async (req, res) => {
+// 4) Refresh endpoint now protected by CSRF + logging/invalidation
+router.post('/refresh', csrfProtection, async (req, res) => {
   const token = req.cookies.refreshToken;
-  if (!token) return res.status(401).json({ error: 'No refresh token provided' });
+  console.log('🔄 /refresh invoked, token from cookie:', token);
+
+  if (!token) {
+    console.warn('↩️  No refresh token provided');
+    return res.status(401).json({ error: 'No refresh token provided' });
+  }
 
   const records = await prisma.refreshToken.findMany({
     where: { expiresAt: { gt: new Date() } },
     include: { user: true },
   });
+  console.log(`📚 Found ${records.length} non-expired refresh records`);
 
   let match = null;
   for (const r of records) {
@@ -173,15 +200,26 @@ router.post('/refresh', async (req, res) => {
       break;
     }
   }
-  if (!match) return res.status(401).json({ error: 'Invalid refresh token' });
 
+  if (!match) {
+    console.warn('❌ No matching refresh token record');
+    return res.status(401).json({ error: 'Invalid refresh token' });
+  }
+
+  console.log(
+    `✅ Refresh token matched record ID ${match.id} for user ${match.user.email}`
+  );
+
+  // revoke old, issue new
   await prisma.refreshToken.delete({ where: { id: match.id } });
   const newRaw = await issueRefresh(match.user);
   const newAccess = signAccess(match.user);
   setAuthCookies(res, newAccess, newRaw);
+
   res.json({ user: match.user });
 });
 
+// 5) Logout
 router.post('/logout', csrfProtection, async (req, res) => {
   try {
     if (req.user?.id) {
@@ -194,11 +232,13 @@ router.post('/logout', csrfProtection, async (req, res) => {
   res.status(204).end();
 });
 
+// 6) Delete account
 router.delete('/delete', requireAuth, async (req, res) => {
   const userId = req.user.id;
   try {
     console.log(`Deleting account for user ID: ${userId}`);
 
+    // cancel subscriptions, detach payment methods, delete customer...
     const activeSubs = await prisma.subscription.findMany({
       where: { userId, stripeSubscriptionId: { not: null }, status: 'ACTIVE' },
       select: { stripeSubscriptionId: true },
@@ -208,7 +248,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
         try {
           await stripe.subscriptions.del(stripeSubscriptionId);
         } catch (err) {
-          console.warn(`⚠️ Could not immediately delete Stripe subscription ${stripeSubscriptionId}:`, err.message || err);
+          console.warn(`⚠️ Could not delete Stripe subscription ${stripeSubscriptionId}:`, err.message || err);
         }
       })
     );

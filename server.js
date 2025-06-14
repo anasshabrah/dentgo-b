@@ -57,8 +57,6 @@ app.use(corsConfig);
 // 4) Stripe Webhook (raw) BEFORE express.json()
 app.post(
   '/api/payments/webhook',
-  // Accept *every* incoming body as raw buffer, so Stripe’s signature
-  // check always sees the exact bytes it signed.
   express.raw({ type: '*/*' }),
   webhookHandler
 );
@@ -78,11 +76,13 @@ const csrfProtection = csurf({
   }
 });
 
-// 8) Public auth—skip CSRF for /refresh
+// 8) Public auth—skip CSRF for the token‐fetch endpoint only
 app.use(
   '/api/auth',
   (req, res, next) => {
-    if (req.path === '/refresh' && req.method === 'POST') return next();
+    if (req.path === '/csrf-token' && req.method === 'GET') {
+      return next();
+    }
     return csrfProtection(req, res, next);
   },
   authRoute
