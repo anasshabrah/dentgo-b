@@ -13,13 +13,15 @@ const VERCEL = /^https:\/\/dentgo.*\.vercel\.app$/;
 
 export const corsConfig = cors({
   origin: (origin, cb) => {
-    if (!origin || ORIGINS.includes(origin) || VERCEL.test(origin)) return cb(null, true);
+    if (!origin || ORIGINS.includes(origin) || VERCEL.test(origin)) {
+      return cb(null, true);
+    }
     cb(new Error(`CORS: origin "${origin}" not allowed`));
   },
   credentials: true,
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','X-CSRF-Token'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
   exposedHeaders: ['Set-Cookie'],
   optionsSuccessStatus: 204,
-  maxAge: 86400
+  maxAge: 86400,
 });

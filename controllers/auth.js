@@ -3,7 +3,6 @@ import express from 'express';
 import passport from 'passport';
 import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcrypt';
-
 import prisma from '../lib/prismaClient.js';
 import { googleClient, stripe } from '../lib/config.js';
 import { normalizeEmail } from '../lib/normalize.js';
@@ -19,27 +18,21 @@ import requireAuth from '../middleware/requireAuth.js';
 
 const router = express.Router();
 
-// ─────────────────────────────────────────────────────────────
-// Rate limit all auth endpoints (10 requests/min)
-// ─────────────────────────────────────────────────────────────
+// Rate limit: 10 req/min
 router.use(rateLimit({
   windowMs: 60_000,
   max: 10,
   message: { error: 'Too many auth attempts' },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
 }));
 
-// ─────────────────────────────────────────────────────────────
 // 1) CSRF token
-// ─────────────────────────────────────────────────────────────
 router.get('/csrf-token', csrf, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
-// ─────────────────────────────────────────────────────────────
 // 2) Google OAuth
-// ─────────────────────────────────────────────────────────────
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
 router.get(
@@ -58,11 +51,10 @@ router.get(
 router.post('/google', csrf, async (req, res) => {
   const { credential } = req.body;
   if (!credential) return res.status(400).json({ error: 'Missing credential' });
-
   try {
     const ticket = await googleClient.verifyIdToken({
       idToken: credential,
-      audience: process.env.GOOGLE_CLIENT_ID
+      audience: process.env.GOOGLE_CLIENT_ID,
     });
     const { sub: providerUserId, email: rawEmail, name, picture } = ticket.getPayload();
     const email = normalizeEmail(rawEmail);
@@ -89,9 +81,7 @@ router.post('/google', csrf, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────
 // 3) Apple OAuth
-// ─────────────────────────────────────────────────────────────
 router.get('/apple', passport.authenticate('apple'));
 
 router.post(
@@ -122,9 +112,7 @@ router.post(
     })(req, res, next)
 );
 
-// ─────────────────────────────────────────────────────────────
 // 4) Refresh Token
-// ─────────────────────────────────────────────────────────────
 router.post('/refresh', csrf, async (req, res) => {
   const token = req.cookies.refresh;
   if (!token) return res.status(401).json({ error: 'No refresh token' });
@@ -143,17 +131,13 @@ router.post('/refresh', csrf, async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────
 // 5) Logout
-// ─────────────────────────────────────────────────────────────
 router.post('/logout', csrf, requireAuth, (req, res) => {
   clearAuthCookies(res);
   res.status(204).end();
 });
 
-// ─────────────────────────────────────────────────────────────
 // 6) Delete account
-// ─────────────────────────────────────────────────────────────
 router.delete('/delete', requireAuth, async (req, res) => {
   const userId = req.user?.userId;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
@@ -161,7 +145,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
   try {
     const subs = await prisma.subscription.findMany({
       where: { userId, status: 'ACTIVE', stripeSubscriptionId: { not: null } },
-      select: { stripeSubscriptionId: true }
+      select: { stripeSubscriptionId: true },
     });
 
     await Promise.all(subs.map(s =>
@@ -172,7 +156,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
     if (user?.stripeCustomerId) {
       const { data: methods } = await stripe.paymentMethods.list({
         customer: user.stripeCustomerId,
-        type: 'card'
+        type: 'card',
       });
       await Promise.all(methods.map(pm => stripe.paymentMethods.detach(pm.id)));
       await stripe.customers.del(user.stripeCustomerId);
@@ -180,20 +164,9 @@ router.delete('/delete', requireAuth, async (req, res) => {
 
     const sessions = await prisma.chatSession.findMany({
       where: { userId },
-      select: { id: true }
+      select: { id: true },
     });
     const chatIds = sessions.map(s => s.id);
-
-    // Optional: Debug related row counts
-    console.log({
-      messages: await prisma.message.count({ where: { chatId: { in: chatIds } } }),
-      sessions: await prisma.chatSession.count({ where: { userId } }),
-      notifications: await prisma.notification.count({ where: { userId } }),
-      cards: await prisma.card.count({ where: { userId } }),
-      subscriptions: await prisma.subscription.count({ where: { userId } }),
-      oauth: await prisma.oAuthAccount.count({ where: { userId } }),
-      tokens: await prisma.refreshToken.count({ where: { userId } }),
-    });
 
     await prisma.$transaction([
       prisma.message.deleteMany({ where: { chatId: { in: chatIds } } }),
@@ -203,7 +176,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
       prisma.card.deleteMany({ where: { userId } }),
       prisma.oAuthAccount.deleteMany({ where: { userId } }),
       prisma.refreshToken.deleteMany({ where: { userId } }),
-      prisma.user.delete({ where: { id: userId } })
+      prisma.user.delete({ where: { id: userId } }),
     ]);
 
     clearAuthCookies(res);
