@@ -20,7 +20,7 @@ import subscriptionsRoute from './controllers/subscriptions.js';
 import chatRoute from './controllers/chat.js';
 import sessionsRoute from './controllers/chats.js';
 import { paymentsRouter, webhookHandler } from './controllers/payments.js';
-import xrayRoute from './controllers/xray.js'; // ← New route added
+import xrayRoute from './controllers/xray.js';
 
 // ← Swagger setup
 import { setupOpenApi } from './lib/openapi.js';
