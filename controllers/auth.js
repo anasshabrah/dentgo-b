@@ -136,13 +136,12 @@ router.post('/logout', csrf, requireAuth, async (req, res) => {
   res.status(204).end();
 });
 
-// 6) Delete account
 router.delete('/delete', requireAuth, async (req, res) => {
   const userId = req.user?.userId;
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    // Cancel any active Stripe subs
+    // Cancel Stripe subs
     const subs = await prisma.subscription.findMany({
       where: { userId, status: 'ACTIVE', stripeSubscriptionId: { not: null } },
       select: { stripeSubscriptionId: true }
@@ -151,7 +150,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
       stripe.subscriptions.del(s.stripeSubscriptionId).catch(() => null)
     ));
 
-    // Delete Stripe customer and payment methods if exist
+    // Delete Stripe customer + cards
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (user?.stripeCustomerId) {
       const { data: methods } = await stripe.paymentMethods.list({
@@ -162,7 +161,6 @@ router.delete('/delete', requireAuth, async (req, res) => {
       await stripe.customers.del(user.stripeCustomerId);
     }
 
-    // Delete user-related data
     const sessions = await prisma.chatSession.findMany({
       where: { userId },
       select: { id: true }
@@ -176,7 +174,7 @@ router.delete('/delete', requireAuth, async (req, res) => {
       prisma.subscription.deleteMany({ where: { userId } }),
       prisma.card.deleteMany({ where: { userId } }),
       prisma.oAuthAccount.deleteMany({ where: { userId } }),
-      prisma.refreshToken.deleteMany({ where: { userId } }), // ← FIXED
+      prisma.refreshToken.deleteMany({ where: { userId } }), // 🔥 YOU NEED THIS!
       prisma.user.delete({ where: { id: userId } })
     ]);
 
