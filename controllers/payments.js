@@ -29,7 +29,10 @@ paymentsRouter.post('/create-setup-intent', async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
     const customerId = user.stripeCustomerId || await ensureCustomer(user);
-    const setupIntent = await stripe.setupIntents.create({ customer: customerId, usage: 'off_session' });
+    const setupIntent = await stripe.setupIntents.create({
+      customer: customerId,
+      usage: 'off_session'
+    });
     res.json({ clientSecret: setupIntent.client_secret });
   } catch (err) {
     next(err);
@@ -86,7 +89,9 @@ paymentsRouter.post('/create-subscription', async (req, res, next) => {
     }
 
     const user = await prisma.user.findUnique({ where: { id: uid } });
-    const customerId = user.stripeCustomerId;
+    // ← Fixed: fallback to ensureCustomer if stripeCustomerId is null
+    const customerId = user.stripeCustomerId || await ensureCustomer(user);
+
     await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
     await stripe.customers.update(customerId, {
       invoice_settings: { default_payment_method: paymentMethodId }
