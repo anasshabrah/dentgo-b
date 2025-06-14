@@ -7,7 +7,14 @@ import bcrypt from 'bcrypt';
 import prisma from '../lib/prismaClient.js';
 import { googleClient, stripe } from '../lib/config.js';
 import { normalizeEmail } from '../lib/normalize.js';
-import { signAccess, issueRefresh, setAuthCookies, clearAuthCookies, csrf } from '../lib/auth.js';
+import {
+  signAccess,
+  issueRefresh,
+  verifyRefresh,
+  setAuthCookies,
+  clearAuthCookies,
+  csrf
+} from '../lib/auth.js';
 import requireAuth from '../middleware/requireAuth.js';
 
 const router = express.Router();
@@ -102,48 +109,40 @@ router.post(
     })(req, res, next)
 );
 
-// 4) Refresh tokens (fixed bcrypt.compare usage)
+// 4) Refresh tokens
 router.post('/refresh', csrf, async (req, res) => {
-  const token = req.cookies.refreshToken;
+  const token = req.cookies.refresh;
   if (!token) return res.status(401).json({ error: 'No refresh token' });
 
-  const records = await prisma.refreshToken.findMany({
-    where: { expiresAt: { gt: new Date() } },
-    include: { user: true }
-  });
-  const match = (
-    await Promise.all(records.map(async r =>
-      (await bcrypt.compare(token, r.tokenHash)) ? r : null
-    ))
-  ).find(Boolean);
+  // Verify/parse JWT
+  let payload;
+  try {
+    payload = verifyRefresh(token);
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired refresh token' });
+  }
 
-  if (!match) return res.status(401).json({ error: 'Invalid refresh token' });
+  const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+  if (!user) return res.status(401).json({ error: 'User not found' });
 
-  await prisma.refreshToken.delete({ where: { id: match.id } });
-  const user = match.user;
-  const newRaw = await issueRefresh(user);
   const newAccess = signAccess(user);
-  setAuthCookies(res, newAccess, newRaw);
-  res.json({ user });
+  const newRefresh = await issueRefresh(user);
+  setAuthCookies(res, newAccess, newRefresh);
+  res.json({ access: newAccess });
 });
 
 // 5) Logout
 router.post('/logout', csrf, requireAuth, async (req, res) => {
-  await prisma.refreshToken.deleteMany({ where: { userId: req.user.id } });
   clearAuthCookies(res);
   res.status(204).end();
 });
 
-// 6) Delete account (unchanged)
+// 6) Delete account
 router.delete('/delete', requireAuth, async (req, res) => {
   const uid = req.user.id;
   try {
     const subs = await prisma.subscription.findMany({
-      where: {
-        userId: uid,
-        status: 'ACTIVE',
-        stripeSubscriptionId: { not: null }
-      },
+      where: { userId: uid, status: 'ACTIVE', stripeSubscriptionId: { not: null } },
       select: { stripeSubscriptionId: true }
     });
     await Promise.all(subs.map(s =>
@@ -168,9 +167,6 @@ router.delete('/delete', requireAuth, async (req, res) => {
     await prisma.$transaction([
       prisma.message.deleteMany({ where: { chatId: { in: chatIds } } }),
       prisma.chatSession.deleteMany({ where: { userId: uid } }),
-      prisma.refreshToken.deleteMany({ where: { userId: uid } }),
-      prisma.card.deleteMany({ where: { userId: uid } }),
-      prisma.notification.deleteMany({ where: { userId: uid } }),
       prisma.subscription.deleteMany({ where: { userId: uid } }),
       prisma.oAuthAccount.deleteMany({ where: { userId: uid } }),
       prisma.user.delete({ where: { id: uid } })
