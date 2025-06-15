@@ -15,8 +15,13 @@ router.use(requireAuth);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Path to the service account key in your project root
-const SERVICE_ACCOUNT_FILE = path.join(__dirname, '../dentgo-8d1f8abc329a.json');
+// Fetch service account credentials from environment variable
+const SERVICE_ACCOUNT_KEY = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+if (!SERVICE_ACCOUNT_KEY) {
+  throw new Error("Google service account key not set in environment variables.");
+}
+
+// Define the Google Drive API scope and folder ID
 const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const PARENT_FOLDER_ID = '1a2b3cD4EfghIJKlmnOPqrStUvWxYz9';
 
@@ -29,9 +34,9 @@ function normalize(name) {
     .replace(/[^a-z0-9\-]/g, '');
 }
 
-// Google Drive setup
+// Google Drive setup using the environment variable for credentials
 const auth = new google.auth.GoogleAuth({
-  keyFile: SERVICE_ACCOUNT_FILE,
+  credentials: JSON.parse(SERVICE_ACCOUNT_KEY),
   scopes: SCOPES,
 });
 const drive = google.drive({ version: 'v3', auth });
@@ -57,7 +62,7 @@ async function getOrCreateFolder(name, parentId) {
   return createRes.data.id;
 }
 
-// Multer setup
+// Multer setup for file upload
 const upload = multer({ dest: 'uploads/' });
 
 router.post('/xray-upload', upload.single('image'), async (req, res) => {
@@ -71,7 +76,7 @@ router.post('/xray-upload', upload.single('image'), async (req, res) => {
     const folderName = normalize(name);
     const folderId = await getOrCreateFolder(folderName, PARENT_FOLDER_ID);
 
-    // Prepare metadata & media
+    // Prepare metadata & media for the file upload
     const fileMetadata = {
       name: file.originalname,
       parents: [folderId],
@@ -81,14 +86,14 @@ router.post('/xray-upload', upload.single('image'), async (req, res) => {
       body: fs.createReadStream(file.path),
     };
 
-    // Upload to Drive
+    // Upload to Google Drive
     await drive.files.create({
       resource: fileMetadata,
       media,
       fields: 'id',
     });
 
-    // Cleanup
+    // Cleanup the local file after upload
     fs.unlinkSync(file.path);
 
     res.json({ success: true, message: `Uploaded to folder ${folderName}` });
