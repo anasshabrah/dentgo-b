@@ -49,7 +49,12 @@ async function getOrCreateFolder(name, parentId) {
     },
     fields: 'id',
   });
-  return createRes.data.id!;
+
+  // Ensure the ID is present before returning
+  if (!createRes.data.id) {
+    throw new Error("Folder creation failed: ID is missing");
+  }
+  return createRes.data.id;
 }
 
 // Multer setup
