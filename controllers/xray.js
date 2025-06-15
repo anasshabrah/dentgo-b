@@ -23,7 +23,7 @@ if (!SERVICE_ACCOUNT_KEY) {
 
 // Define the Google Drive API scope and folder ID
 const SCOPES = ['https://www.googleapis.com/auth/drive'];
-const PARENT_FOLDER_ID = '1a2b3cD4EfghIJKlmnOPqrStUvWxYz9';
+const PARENT_FOLDER_ID = '1gWSW6J74GyjcSb4qptVg1AEcIWCwu0Ym';
 
 // Normalize patient name to lowercase-hyphen format
 function normalize(name) {
